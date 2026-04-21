@@ -1,0 +1,8 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: bad
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: [this, is, not, a, string

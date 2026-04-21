@@ -1,0 +1,9 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: demo
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: localhost:9092
+  steps: []
