@@ -10,12 +10,14 @@ import (
 var version = "dev"
 
 func newRootCmd() *cobra.Command {
-	return &cobra.Command{
+	root := &cobra.Command{
 		Use:          "edt",
 		Short:        "event-driven-tests-ai — test Kafka, HTTP and AI-agent flows",
 		SilenceUsage: true,
 		Version:      version,
 	}
+	root.AddCommand(newValidateCmd())
+	return root
 }
 
 func main() {
