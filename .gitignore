@@ -1,0 +1,8 @@
+dist/
+*.test
+/edt
+.idea/
+.vscode/
+coverage.out
+*.out
+.DS_Store
