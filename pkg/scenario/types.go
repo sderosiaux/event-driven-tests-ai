@@ -147,6 +147,7 @@ type HTTPStep struct {
 	Body     string            `yaml:"body,omitempty" json:"body,omitempty"`
 	Expect   *HTTPExpect       `yaml:"expect,omitempty" json:"expect,omitempty"`
 	FailRate float64           `yaml:"fail_rate,omitempty" json:"fail_rate,omitempty"`
+	FailMode string            `yaml:"fail_mode,omitempty" json:"fail_mode,omitempty"` // timeout | http_5xx
 }
 
 type HTTPExpect struct {

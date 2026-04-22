@@ -86,6 +86,9 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 		return fmt.Errorf("produce: no kafka client configured")
 	}
 	p := step.Produce
+	if err := validateProduceFailMode(p.FailMode); err != nil {
+		return err
+	}
 	count := p.Count
 	if count <= 0 {
 		count = 1
@@ -121,17 +124,33 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 			}
 		}
 
-		// Failure injection: skip the produce and record a failed event.
+		// Failure injection: per fail_mode, either skip the produce, or
+		// actually send a corrupted payload that downstream consumers will
+		// reject. In both cases we record a ProducedFailed event so checks
+		// can introspect.
 		if p.FailRate > 0 && rng.Float64() < p.FailRate {
+			mode := nonEmptyOr(p.FailMode, "timeout")
+			payloadOnWire := payload
+			direction := events.ProducedFailed
+			if mode == "schema_violation" {
+				// Send mangled bytes — a half-truncated value is enough to
+				// break Avro/Proto/JSON deserialization downstream.
+				corrupted := corruptValue(valueBytes)
+				rec := kafka.Record{Topic: p.Topic, Key: []byte(key), Value: corrupted}
+				if _, err := r.Kafka.Produce(ctx, rec); err != nil {
+					r.Logger("schema_violation produce error: %v", err)
+				}
+				payloadOnWire = map[string]any{"corrupted_bytes_len": len(corrupted)}
+			}
 			r.Store.Append(events.Event{
 				Stream: p.Topic,
 				Key:    key,
 				Ts:     time.Now().UTC(),
 				Payload: map[string]any{
-					"injected_failure": nonEmptyOr(p.FailMode, "timeout"),
-					"original":         payload,
+					"injected_failure": mode,
+					"original":         payloadOnWire,
 				},
-				Direction: events.ProducedFailed,
+				Direction: direction,
 			})
 		} else {
 			rec := kafka.Record{Topic: p.Topic, Key: []byte(key), Value: valueBytes}
@@ -172,6 +191,15 @@ func nonEmptyOr(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+// corruptValue returns a deliberately damaged copy of v: the first half of the
+// bytes, which is enough to break JSON/Avro/Protobuf decoders downstream.
+func corruptValue(v []byte) []byte {
+	if len(v) == 0 {
+		return []byte{0xFF}
+	}
+	return append([]byte(nil), v[:len(v)/2]...)
 }
 
 // ---- consume ----------------------------------------------------------------
@@ -285,11 +313,32 @@ func (r *Runner) runHTTP(ctx context.Context, step *scenario.Step) error {
 	if r.HTTP == nil {
 		return fmt.Errorf("http: no http client configured")
 	}
-	resp, err := r.HTTP.Do(ctx, step.HTTP)
-	if err != nil {
-		// Record a failure event but do not abort — checks decide pass/fail.
+	h := step.HTTP
+	if err := validateHTTPFailMode(h.FailMode); err != nil {
+		return err
+	}
+
+	// Deterministic per-step RNG so fail_rate sequences are reproducible.
+	rng := mrand.New(mrand.NewSource(int64(fnv32(step.Name))))
+	if h.FailRate > 0 && rng.Float64() < h.FailRate {
+		mode := nonEmptyOr(h.FailMode, "timeout")
 		r.Store.Append(events.Event{
-			Stream:    "http:" + step.HTTP.Path,
+			Stream:    "http:" + h.Path,
+			Ts:        time.Now().UTC(),
+			Payload: map[string]any{
+				"injected_failure": mode,
+				"status":           injectedHTTPStatus(mode),
+			},
+			Direction: events.HTTPCall,
+		})
+		// Injected failures do not abort the scenario — checks decide.
+		return nil
+	}
+
+	resp, err := r.HTTP.Do(ctx, h)
+	if err != nil {
+		r.Store.Append(events.Event{
+			Stream:    "http:" + h.Path,
 			Ts:        time.Now().UTC(),
 			Payload:   map[string]any{"error": err.Error()},
 			Direction: events.HTTPCall,
@@ -297,22 +346,51 @@ func (r *Runner) runHTTP(ctx context.Context, step *scenario.Step) error {
 		return nil
 	}
 	r.Store.Append(events.Event{
-		Stream:    "http:" + step.HTTP.Path,
-		Ts:        time.Now().UTC(),
+		Stream: "http:" + h.Path,
+		Ts:     time.Now().UTC(),
 		Payload: map[string]any{
-			"status":  resp.Status,
-			"body":    resp.Body,
+			"status":     resp.Status,
+			"body":       resp.Body,
 			"latency_ms": resp.Latency.Milliseconds(),
 		},
 		Direction: events.HTTPCall,
 	})
 
-	if step.HTTP.Expect != nil {
-		if err := httpc.CheckExpectation(step.HTTP.Expect, resp); err != nil {
+	if h.Expect != nil {
+		if err := httpc.CheckExpectation(h.Expect, resp); err != nil {
 			return fmt.Errorf("http expect: %w", err)
 		}
 	}
 	return nil
+}
+
+// injectedHTTPStatus maps a fail_mode label to a synthetic HTTP status.
+// Unknown modes default to 0 (no response).
+func injectedHTTPStatus(mode string) int {
+	switch mode {
+	case "http_5xx", "5xx":
+		return 503
+	case "http_4xx", "4xx":
+		return 429
+	default:
+		return 0 // timeout / unknown
+	}
+}
+
+func validateProduceFailMode(mode string) error {
+	switch mode {
+	case "", "timeout", "broker_not_available", "schema_violation":
+		return nil
+	}
+	return fmt.Errorf("produce.fail_mode %q not recognized (allowed: timeout, broker_not_available, schema_violation)", mode)
+}
+
+func validateHTTPFailMode(mode string) error {
+	switch mode {
+	case "", "timeout", "http_5xx", "5xx", "http_4xx", "4xx":
+		return nil
+	}
+	return fmt.Errorf("http.fail_mode %q not recognized (allowed: timeout, http_5xx, http_4xx)", mode)
 }
 
 // ---- helpers ----------------------------------------------------------------

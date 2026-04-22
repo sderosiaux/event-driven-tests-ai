@@ -57,9 +57,14 @@ func (f *fakeKafka) Consume(ctx context.Context, req kafka.ConsumeRequest, fn fu
 }
 func (f *fakeKafka) Close() {}
 
-type fakeHTTP struct{ next *httpc.Response; err error }
+type fakeHTTP struct {
+	next     *httpc.Response
+	err      error
+	lastStep *scenario.HTTPStep
+}
 
-func (f *fakeHTTP) Do(_ context.Context, _ *scenario.HTTPStep) (*httpc.Response, error) {
+func (f *fakeHTTP) Do(_ context.Context, s *scenario.HTTPStep) (*httpc.Response, error) {
+	f.lastStep = s
 	return f.next, f.err
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/events"
+	"github.com/event-driven-tests-ai/edt/pkg/httpc"
 	"github.com/event-driven-tests-ai/edt/pkg/kafka"
 	"github.com/event-driven-tests-ai/edt/pkg/orchestrator"
 	"github.com/event-driven-tests-ai/edt/pkg/scenario"
@@ -13,16 +14,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var httpcResp200 = httpc.Response{Status: 200}
+
 func TestProduceFailRateHalfDeterministic(t *testing.T) {
 	store := events.NewMemStore(0)
 	fk := &fakeKafka{}
 	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
 
+	// "timeout" mode skips the broker entirely so the count split is observable.
 	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
 		Name: "flaky",
 		Produce: &scenario.ProduceStep{
 			Topic: "orders", Payload: `{"k":1}`,
-			Count: 200, FailRate: 0.5, FailMode: "schema_violation",
+			Count: 200, FailRate: 0.5, FailMode: "timeout",
 		},
 	}}}}
 
@@ -37,9 +41,8 @@ func TestProduceFailRateHalfDeterministic(t *testing.T) {
 			fails++
 		}
 	}
-	// Deterministic RNG: check result bound (loose, but tight enough to detect regression).
 	assert.InDelta(t, 100, fails, 30, "fail rate ~50%% of 200")
-	assert.Len(t, fk.produced, 200-fails, "successful produces must hit the fake kafka")
+	assert.Len(t, fk.produced, 200-fails, "successful produces must hit the fake kafka in timeout mode")
 }
 
 func TestProduceFailRateZeroNeverFails(t *testing.T) {
@@ -57,6 +60,41 @@ func TestProduceFailRateZeroNeverFails(t *testing.T) {
 	assert.Len(t, fk.produced, 20)
 	for _, e := range store.Query("t") {
 		assert.Equal(t, events.Produced, e.Direction)
+	}
+}
+
+func TestProduceFailModeUnknownIsRejected(t *testing.T) {
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, &fakeKafka{}, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name:    "p",
+		Produce: &scenario.ProduceStep{Topic: "t", Payload: `{}`, Count: 1, FailRate: 1, FailMode: "garbage"},
+	}}}}
+	err := r.Run(context.Background(), s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fail_mode")
+}
+
+func TestProduceSchemaViolationActuallyHitsBroker(t *testing.T) {
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{}
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name: "p",
+		Produce: &scenario.ProduceStep{
+			Topic: "t", Payload: `{"orderId":"abc","amount":99.5}`,
+			Count: 5, FailRate: 1.0, FailMode: "schema_violation",
+		},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	// schema_violation = corrupted bytes still hit the broker
+	assert.Len(t, fk.produced, 5)
+	for _, rec := range fk.produced {
+		assert.Less(t, len(rec.Value), len(`{"orderId":"abc","amount":99.5}`), "value must be corrupted (truncated)")
+	}
+	for _, e := range store.Query("t") {
+		assert.Equal(t, events.ProducedFailed, e.Direction)
+		assert.Equal(t, "schema_violation", e.Payload.(map[string]any)["injected_failure"])
 	}
 }
 
@@ -80,6 +118,40 @@ func TestProduceFailRateOneAlwaysFails(t *testing.T) {
 		m := e.Payload.(map[string]any)
 		assert.Equal(t, "broker_not_available", m["injected_failure"])
 	}
+}
+
+// Regression: codex P0 — HTTP fail_rate must actually inject failures.
+func TestHTTPFailRateOneAlwaysInjects(t *testing.T) {
+	hp := &fakeHTTP{} // would 500 if reached, but we should never reach it
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, nil, hp, store)
+
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name: "flaky-http",
+		HTTP: &scenario.HTTPStep{
+			Method: "GET", Path: "/x",
+			FailRate: 1.0, FailMode: "http_5xx",
+		},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	require.Nil(t, hp.lastStep, "fail_rate=1 must skip the actual call")
+	got := store.Query("http:/x")
+	require.Len(t, got, 1)
+	m := got[0].Payload.(map[string]any)
+	assert.Equal(t, "http_5xx", m["injected_failure"])
+	assert.Equal(t, 503, m["status"])
+}
+
+func TestHTTPFailRateZeroNeverInjects(t *testing.T) {
+	hp := &fakeHTTP{next: &httpcResp200}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, nil, hp, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name: "stable-http",
+		HTTP: &scenario.HTTPStep{Method: "GET", Path: "/x", FailRate: 0},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	require.NotNil(t, hp.lastStep)
 }
 
 func TestConsumerSlowMode(t *testing.T) {
