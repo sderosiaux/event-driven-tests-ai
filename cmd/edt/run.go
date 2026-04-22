@@ -17,6 +17,7 @@ import (
 	"github.com/event-driven-tests-ai/edt/pkg/kafka"
 	"github.com/event-driven-tests-ai/edt/pkg/orchestrator"
 	"github.com/event-driven-tests-ai/edt/pkg/report"
+	"github.com/event-driven-tests-ai/edt/pkg/reporter"
 	"github.com/event-driven-tests-ai/edt/pkg/scenario"
 	"github.com/spf13/cobra"
 )
@@ -26,7 +27,8 @@ type runFlags struct {
 	format           string // json | console
 	bootstrapServers string
 	timeout          time.Duration
-	reportTo         string // reserved for M2
+	reportTo         string // control-plane base URL for PushReport
+	reportToken      string // optional bearer token
 }
 
 func newRunCmd() *cobra.Command {
@@ -42,7 +44,8 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&f.format, "format", "console", "Report format: console | json")
 	cmd.Flags().StringVar(&f.bootstrapServers, "bootstrap-servers", "", "Override Kafka bootstrap servers")
 	cmd.Flags().DurationVar(&f.timeout, "timeout", 10*time.Minute, "Overall run timeout")
-	cmd.Flags().StringVar(&f.reportTo, "report-to", "", "Control plane URL (reserved for M2)")
+	cmd.Flags().StringVar(&f.reportTo, "report-to", os.Getenv("EDT_CONTROL_PLANE"), "Control plane base URL — pushes the run report on completion")
+	cmd.Flags().StringVar(&f.reportToken, "report-token", os.Getenv("EDT_TOKEN"), "Bearer token for --report-to")
 	_ = cmd.MarkFlagRequired("file")
 	return cmd
 }
@@ -117,6 +120,17 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 	}
 	rep.EventCount = store.Len()
 	rep.Finalize()
+
+	// Push to control plane if requested. Failure here MUST NOT alter the
+	// scenario's exit code — losing the control plane must not turn a green
+	// CI build red.
+	if f.reportTo != "" {
+		pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := reporter.New(f.reportTo, f.reportToken).PushReport(pushCtx, rep); err != nil {
+			fmt.Fprintf(stderr, "warning: push report to %s failed: %v\n", f.reportTo, err)
+		}
+		pushCancel()
+	}
 
 	return writeAndExit(stdout, rep, f.format)
 }

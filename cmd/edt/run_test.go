@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/event-driven-tests-ai/edt/pkg/controlplane"
+	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,6 +89,51 @@ func TestEdtRunErrorsOnScenarioFailure(t *testing.T) {
 	require.True(t, errors.As(err, &ex))
 	assert.Equal(t, 2, ex.ExitCode())
 	assert.Contains(t, stdout.String(), "status:   error")
+}
+
+// E2E smoke for M2-T5: CLI run pushes the report to a control-plane HTTP server.
+func TestEdtRunPushesReportTo(t *testing.T) {
+	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer httpsrv.Close()
+
+	// Launch a real control plane on a random port.
+	store := storage.NewMemStore()
+	cp := controlplane.NewServerWithStorage(controlplane.Config{}, store)
+	cpSrv := httptest.NewServer(cp.Handler())
+	defer cpSrv.Close()
+
+	path := writeScenario(t, httpsrv.URL, "    - name: ok\n      expr: \"true\"\n      severity: critical\n")
+
+	var stdout, stderr bytes.Buffer
+	err := doRun(context.Background(), &stdout, &stderr, &runFlags{
+		file:     path,
+		format:   "json",
+		reportTo: cpSrv.URL,
+	})
+	require.NoError(t, err, stdout.String()+stderr.String())
+
+	runs, err := store.ListRuns(context.Background(), "cli-http-test", 10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1, "control plane should have received the run")
+	assert.Equal(t, "pass", runs[0].Status)
+}
+
+// Failing push must not change exit code.
+func TestEdtRunPushFailureKeepsExitCode(t *testing.T) {
+	httpsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer httpsrv.Close()
+	path := writeScenario(t, httpsrv.URL, "    - name: ok\n      expr: \"true\"\n      severity: critical\n")
+	var stdout, stderr bytes.Buffer
+	err := doRun(context.Background(), &stdout, &stderr, &runFlags{
+		file: path, format: "json",
+		reportTo: "http://127.0.0.1:1", // unreachable
+	})
+	require.NoError(t, err, "scenario should still pass even when push fails")
+	assert.Contains(t, stderr.String(), "warning: push report")
 }
 
 func TestEdtRunMissingFile(t *testing.T) {
