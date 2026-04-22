@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	mrand "math/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +97,11 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 		return err
 	}
 
+	// Deterministic step-scoped RNG for fail_rate decisions.
+	// The seed derives from the step name so a given scenario+step always
+	// yields the same failure sequence (important for reproducible CI runs).
+	rng := mrand.New(mrand.NewSource(int64(fnv32(step.Name))))
+
 	for i := 0; i < count; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -114,20 +121,34 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 			}
 		}
 
-		rec := kafka.Record{Topic: p.Topic, Key: []byte(key), Value: valueBytes}
-		out, err := r.Kafka.Produce(ctx, rec)
-		direction := events.Produced
-		if err != nil {
-			direction = events.ProducedFailed
-			r.Logger("produce error: %v", err)
+		// Failure injection: skip the produce and record a failed event.
+		if p.FailRate > 0 && rng.Float64() < p.FailRate {
+			r.Store.Append(events.Event{
+				Stream: p.Topic,
+				Key:    key,
+				Ts:     time.Now().UTC(),
+				Payload: map[string]any{
+					"injected_failure": nonEmptyOr(p.FailMode, "timeout"),
+					"original":         payload,
+				},
+				Direction: events.ProducedFailed,
+			})
+		} else {
+			rec := kafka.Record{Topic: p.Topic, Key: []byte(key), Value: valueBytes}
+			out, err := r.Kafka.Produce(ctx, rec)
+			direction := events.Produced
+			if err != nil {
+				direction = events.ProducedFailed
+				r.Logger("produce error: %v", err)
+			}
+			r.Store.Append(events.Event{
+				Stream:    p.Topic,
+				Key:       string(out.Key),
+				Ts:        time.Now().UTC(),
+				Payload:   payload,
+				Direction: direction,
+			})
 		}
-		r.Store.Append(events.Event{
-			Stream:    p.Topic,
-			Key:       string(out.Key),
-			Ts:        time.Now().UTC(),
-			Payload:   payload,
-			Direction: direction,
-		})
 
 		if tickEvery > 0 && i < count-1 {
 			select {
@@ -138,6 +159,19 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 		}
 	}
 	return nil
+}
+
+func fnv32(s string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	return h.Sum32()
+}
+
+func nonEmptyOr(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 // ---- consume ----------------------------------------------------------------
@@ -159,9 +193,23 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	var slow *scenario.SlowMode
+	if c.SlowMode != nil && c.SlowMode.PauseEvery > 0 {
+		slow = c.SlowMode
+	}
+	var pauseFor time.Duration
+	if slow != nil {
+		d, err := time.ParseDuration(slow.PauseFor)
+		if err != nil {
+			return fmt.Errorf("slow_mode.pause_for %q: %w", slow.PauseFor, err)
+		}
+		pauseFor = d
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	var consumeErr error
+	consumed := 0
 	go func() {
 		defer wg.Done()
 		err := r.Kafka.Consume(cctx, func(rec kafka.Record) error {
@@ -174,6 +222,14 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 				Payload:   payload,
 				Direction: events.Consumed,
 			})
+			consumed++
+			if slow != nil && consumed%slow.PauseEvery == 0 && pauseFor > 0 {
+				select {
+				case <-time.After(pauseFor):
+				case <-cctx.Done():
+					return cctx.Err()
+				}
+			}
 			return nil
 		})
 		// Cancellation/timeout is expected; surface only "real" errors.
