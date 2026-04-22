@@ -128,7 +128,7 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 		// actually send a corrupted payload that downstream consumers will
 		// reject. In both cases we record a ProducedFailed event so checks
 		// can introspect.
-		if p.FailRate > 0 && rng.Float64() < p.FailRate {
+		if p.FailRate > 0 && rng.Float64() < p.FailRate.Float64() {
 			mode := nonEmptyOr(p.FailMode, "timeout")
 			payloadOnWire := payload
 			direction := events.ProducedFailed
@@ -320,7 +320,7 @@ func (r *Runner) runHTTP(ctx context.Context, step *scenario.Step) error {
 
 	// Deterministic per-step RNG so fail_rate sequences are reproducible.
 	rng := mrand.New(mrand.NewSource(int64(fnv32(step.Name))))
-	if h.FailRate > 0 && rng.Float64() < h.FailRate {
+	if h.FailRate > 0 && rng.Float64() < h.FailRate.Float64() {
 		mode := nonEmptyOr(h.FailMode, "timeout")
 		r.Store.Append(events.Event{
 			Stream:    "http:" + h.Path,

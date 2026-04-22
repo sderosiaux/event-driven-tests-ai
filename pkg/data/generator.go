@@ -105,12 +105,13 @@ func (g *FakerGenerator) Reseed() {
 
 // ---- Override resolver -----------------------------------------------------
 
-// overrideRE matches `${name(args)}` with greedy args (commas allowed inside
-// quoted strings would require a real parser; M1 stays simple).
-var overrideRE = regexp.MustCompile(`^\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\(([^)]*)\)\}$`)
+// callRE matches the outer `${name(...args)}` shape; the args list itself is
+// scanned by a hand-rolled tokenizer so that double-quoted arguments may
+// contain commas and parentheses without breaking the parse.
+var callRE = regexp.MustCompile(`^\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\((.*)\)\}$`)
 
 func (g *FakerGenerator) resolve(expr string) (any, error) {
-	m := overrideRE.FindStringSubmatch(strings.TrimSpace(expr))
+	m := callRE.FindStringSubmatch(strings.TrimSpace(expr))
 	if m == nil {
 		// Not a function call: treat as literal string.
 		return expr, nil
@@ -121,20 +122,44 @@ func (g *FakerGenerator) resolve(expr string) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown helper %q", name)
 	}
-	args := splitArgs(rawArgs)
+	args, err := splitArgs(rawArgs)
+	if err != nil {
+		return nil, fmt.Errorf("helper %q: %w", name, err)
+	}
 	return helper(args, g.rng)
 }
 
-func splitArgs(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return nil
+// splitArgs tokenizes a comma-separated argument list. Double-quoted strings
+// are returned without their surrounding quotes and may contain commas, parens,
+// and escaped quotes (`\"`).
+func splitArgs(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
 	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, len(parts))
-	for i, p := range parts {
-		out[i] = strings.TrimSpace(p)
+	var out []string
+	var cur strings.Builder
+	inQuote := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		switch {
+		case c == '\\' && inQuote && i+1 < len(raw):
+			cur.WriteByte(raw[i+1])
+			i++
+		case c == '"':
+			inQuote = !inQuote
+		case c == ',' && !inQuote:
+			out = append(out, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteByte(c)
+		}
 	}
-	return out
+	if inQuote {
+		return nil, fmt.Errorf("unterminated quoted argument in %q", raw)
+	}
+	out = append(out, strings.TrimSpace(cur.String()))
+	return out, nil
 }
 
 // ---- Helpers ---------------------------------------------------------------

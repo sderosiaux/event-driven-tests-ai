@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -126,6 +127,9 @@ func isJSON(ct string) bool {
 
 // CheckExpectation evaluates a step's expect block against a Response.
 // Returns nil on match, otherwise an error describing the first mismatch.
+//
+// Body field values may be either a literal (equality) or a matcher object —
+// see matchValue for the supported matcher set (in, regex, gt, lt, gte, lte).
 func CheckExpectation(exp *scenario.HTTPExpect, r *Response) error {
 	if exp == nil {
 		return nil
@@ -144,12 +148,103 @@ func CheckExpectation(exp *scenario.HTTPExpect, r *Response) error {
 			return fmt.Errorf("body: expected JSON object, got %T", r.Body)
 		}
 		for k, want := range exp.Body {
-			if !equalAny(got[k], want) {
-				return fmt.Errorf("body field %q: want %v, got %v", k, want, got[k])
+			if err := matchValue(got[k], want); err != nil {
+				return fmt.Errorf("body field %q: %w", k, err)
 			}
 		}
 	}
 	return nil
+}
+
+// matchValue dispatches on the shape of `want`: a map containing exactly one
+// matcher key (in/regex/gt/lt/gte/lte) is treated as a matcher; anything else
+// falls back to JSON-normalized equality.
+func matchValue(got, want any) error {
+	if m, ok := want.(map[string]any); ok && len(m) == 1 {
+		for op, arg := range m {
+			return applyMatcher(op, arg, got)
+		}
+	}
+	if !equalAny(got, want) {
+		return fmt.Errorf("want %v, got %v", want, got)
+	}
+	return nil
+}
+
+func applyMatcher(op string, arg, got any) error {
+	switch op {
+	case "in":
+		list, ok := arg.([]any)
+		if !ok {
+			return fmt.Errorf("matcher 'in' expects a list, got %T", arg)
+		}
+		for _, candidate := range list {
+			if equalAny(got, candidate) {
+				return nil
+			}
+		}
+		return fmt.Errorf("value %v not in %v", got, list)
+	case "regex":
+		pattern, ok := arg.(string)
+		if !ok {
+			return fmt.Errorf("matcher 'regex' expects a string, got %T", arg)
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return fmt.Errorf("invalid regex %q: %w", pattern, err)
+		}
+		if !re.MatchString(fmt.Sprint(got)) {
+			return fmt.Errorf("value %v does not match /%s/", got, pattern)
+		}
+		return nil
+	case "gt", "lt", "gte", "lte":
+		gf, gok := toNumber(got)
+		af, aok := toNumber(arg)
+		if !gok || !aok {
+			return fmt.Errorf("matcher %q requires numeric operands; got=%v want=%v", op, got, arg)
+		}
+		switch op {
+		case "gt":
+			if gf > af {
+				return nil
+			}
+		case "gte":
+			if gf >= af {
+				return nil
+			}
+		case "lt":
+			if gf < af {
+				return nil
+			}
+		case "lte":
+			if gf <= af {
+				return nil
+			}
+		}
+		return fmt.Errorf("value %v not %s %v", got, op, arg)
+	default:
+		// Unknown operator → treat the whole map as a literal equality target.
+		if !equalAny(got, map[string]any{op: arg}) {
+			return fmt.Errorf("unknown matcher %q (and value did not match literally)", op)
+		}
+		return nil
+	}
+}
+
+func toNumber(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	}
+	return 0, false
 }
 
 func equalAny(a, b any) bool {

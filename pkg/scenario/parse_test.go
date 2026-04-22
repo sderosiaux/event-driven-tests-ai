@@ -63,7 +63,7 @@ func TestParseFull(t *testing.T) {
 	assert.Equal(t, "place-order", s.Spec.Steps[0].Name)
 	require.NotNil(t, s.Spec.Steps[0].Produce)
 	assert.Equal(t, "orders", s.Spec.Steps[0].Produce.Topic)
-	assert.InDelta(t, 0.02, s.Spec.Steps[0].Produce.FailRate, 1e-9)
+	assert.InDelta(t, 0.02, s.Spec.Steps[0].Produce.FailRate.Float64(), 1e-9)
 	assert.Equal(t, "schema_violation", s.Spec.Steps[0].Produce.FailMode)
 
 	require.NotNil(t, s.Spec.Steps[1].Consume)

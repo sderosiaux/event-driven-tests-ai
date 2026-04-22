@@ -97,6 +97,61 @@ func TestBasicAuth(t *testing.T) {
 	assert.Equal(t, "secret", gotPass)
 }
 
+// Codex finding: §6.2 documents matchers like `status: { in: [...] }`.
+func TestExpectMatcherIn(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"status":"picking"}`))
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	resp, _ := c.Do(context.Background(), &scenario.HTTPStep{Path: "/x"})
+
+	assert.NoError(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{
+			"status": map[string]any{"in": []any{"received", "picking", "shipped"}},
+		},
+	}, resp))
+
+	assert.Error(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{
+			"status": map[string]any{"in": []any{"cancelled"}},
+		},
+	}, resp))
+}
+
+func TestExpectMatcherRegex(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"order_42abc"}`))
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	resp, _ := c.Do(context.Background(), &scenario.HTTPStep{Path: "/x"})
+	assert.NoError(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{"id": map[string]any{"regex": `^order_\d+[a-z]+$`}},
+	}, resp))
+}
+
+func TestExpectMatcherGtLte(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"count":42}`))
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	resp, _ := c.Do(context.Background(), &scenario.HTTPStep{Path: "/x"})
+	assert.NoError(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{"count": map[string]any{"gt": 10}},
+	}, resp))
+	assert.NoError(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{"count": map[string]any{"lte": 42}},
+	}, resp))
+	assert.Error(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{"count": map[string]any{"gt": 100}},
+	}, resp))
+}
+
 func TestPostBody(t *testing.T) {
 	var got string
 	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {

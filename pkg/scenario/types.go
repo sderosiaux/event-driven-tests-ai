@@ -114,13 +114,13 @@ type Step struct {
 }
 
 type ProduceStep struct {
-	Topic    string `yaml:"topic" json:"topic"`
-	Payload  string `yaml:"payload" json:"payload"` // ref to data key, e.g. ${data.orders}
-	Key      string `yaml:"key,omitempty" json:"key,omitempty"`
-	Rate     string `yaml:"rate,omitempty" json:"rate,omitempty"` // e.g. "50/s"
-	Count    int    `yaml:"count,omitempty" json:"count,omitempty"`
-	FailRate float64 `yaml:"fail_rate,omitempty" json:"fail_rate,omitempty"`
-	FailMode string `yaml:"fail_mode,omitempty" json:"fail_mode,omitempty"` // schema_violation | timeout | broker_not_available
+	Topic    string     `yaml:"topic" json:"topic"`
+	Payload  string     `yaml:"payload" json:"payload"` // ref to data key, e.g. ${data.orders}
+	Key      string     `yaml:"key,omitempty" json:"key,omitempty"`
+	Rate     string     `yaml:"rate,omitempty" json:"rate,omitempty"` // e.g. "50/s"
+	Count    int        `yaml:"count,omitempty" json:"count,omitempty"`
+	FailRate Percentage `yaml:"fail_rate,omitempty" json:"fail_rate,omitempty"`
+	FailMode string     `yaml:"fail_mode,omitempty" json:"fail_mode,omitempty"` // schema_violation | timeout | broker_not_available
 }
 
 type ConsumeStep struct {
@@ -146,7 +146,7 @@ type HTTPStep struct {
 	Headers  map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	Body     string            `yaml:"body,omitempty" json:"body,omitempty"`
 	Expect   *HTTPExpect       `yaml:"expect,omitempty" json:"expect,omitempty"`
-	FailRate float64           `yaml:"fail_rate,omitempty" json:"fail_rate,omitempty"`
+	FailRate Percentage        `yaml:"fail_rate,omitempty" json:"fail_rate,omitempty"`
 	FailMode string            `yaml:"fail_mode,omitempty" json:"fail_mode,omitempty"` // timeout | http_5xx
 }
 

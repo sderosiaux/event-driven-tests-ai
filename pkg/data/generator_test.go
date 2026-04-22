@@ -2,6 +2,7 @@ package data_test
 
 import (
 	mrand "math/rand"
+	"strings"
 	"testing"
 
 	"github.com/event-driven-tests-ai/edt/pkg/data"
@@ -90,6 +91,30 @@ func TestReseedProducesIdenticalSequence(t *testing.T) {
 	g.Reseed()
 	out2, _ := g.Generate()
 	assert.Equal(t, out1["id"], out2["id"])
+}
+
+// Codex finding: quoted strings with commas and parens must round-trip.
+func TestQuotedArgsPreserveCommasAndParens(t *testing.T) {
+	reg := data.NewRegistry()
+	var seen []string
+	reg.Register("echo", func(args []string, _ *mrand.Rand) (any, error) {
+		seen = args
+		return strings.Join(args, "|"), nil
+	})
+	g := data.NewFakerGenerator(reg, 1, map[string]string{
+		"v": `${echo("a,b", "c (nested)", plain, "with \"quote\"")}`,
+	})
+	_, err := g.Generate()
+	require.NoError(t, err)
+	require.Equal(t, []string{"a,b", "c (nested)", "plain", `with "quote"`}, seen)
+}
+
+func TestUnterminatedQuoteErrors(t *testing.T) {
+	g := data.NewFakerGenerator(nil, 1, map[string]string{
+		"x": `${faker.number.int("oops, 5)}`,
+	})
+	_, err := g.Generate()
+	require.Error(t, err)
 }
 
 func TestCustomHelper(t *testing.T) {
