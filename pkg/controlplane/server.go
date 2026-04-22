@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/event-driven-tests-ai/edt/pkg/controlplane/api"
+	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -27,6 +29,8 @@ type Server struct {
 	cfg    Config
 	router chi.Router
 	httpd  *http.Server
+	store  storage.Storage
+	api    *api.API
 }
 
 // NewServer wires the router and middleware. It does not bind the listener;
@@ -45,13 +49,34 @@ func NewServer(cfg Config) *Server {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	s := &Server{cfg: cfg, router: r}
+	store := storage.NewMemStore() // M2 default; Postgres backend lands in M2-T2b.
+	s := &Server{cfg: cfg, router: r, store: store, api: api.New(store)}
+	s.routes()
+	return s
+}
+
+// NewServerWithStorage lets callers (tests, future Postgres entrypoint) inject
+// a Storage rather than the default in-memory store.
+func NewServerWithStorage(cfg Config, store storage.Storage) *Server {
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(30 * time.Second))
+	if cfg.Logger == nil {
+		cfg.Logger = func(string, ...any) {}
+	}
+	if cfg.Addr == "" {
+		cfg.Addr = ":8080"
+	}
+	s := &Server{cfg: cfg, router: r, store: store, api: api.New(store)}
 	s.routes()
 	return s
 }
 
 func (s *Server) routes() {
 	s.router.Get("/healthz", s.handleHealthz)
+	s.api.MountScenarios(s.router)
 }
 
 // Handler returns the underlying http.Handler for direct use in tests
