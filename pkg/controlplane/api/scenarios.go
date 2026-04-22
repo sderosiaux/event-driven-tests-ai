@@ -28,14 +28,16 @@ func toScenarioResponse(s storage.Scenario) scenarioResponse {
 	}
 }
 
-// MountScenarios attaches scenario CRUD routes onto a chi router.
-func (a *API) MountScenarios(r chi.Router) {
-	r.Route("/api/v1/scenarios", func(r chi.Router) {
-		r.Get("/", a.listScenarios)
-		r.Post("/", a.createScenario)
-		r.Get("/{name}", a.getScenario)
-		r.Put("/{name}", a.updateScenario)
-	})
+// MountScenarioReads attaches read-only scenario routes onto a chi router.
+func (a *API) MountScenarioReads(r chi.Router) {
+	r.Get("/api/v1/scenarios", a.listScenarios)
+	r.Get("/api/v1/scenarios/{name}", a.getScenario)
+}
+
+// MountScenarioWrites attaches mutating scenario routes onto a chi router.
+func (a *API) MountScenarioWrites(r chi.Router) {
+	r.Post("/api/v1/scenarios", a.createScenario)
+	r.Put("/api/v1/scenarios/{name}", a.updateScenario)
 }
 
 func (a *API) listScenarios(w http.ResponseWriter, r *http.Request) {

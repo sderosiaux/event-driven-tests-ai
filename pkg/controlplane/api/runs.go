@@ -13,14 +13,16 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// MountRuns attaches the run-ingestion + SLO routes onto a chi router.
-func (a *API) MountRuns(r chi.Router) {
-	r.Route("/api/v1/runs", func(r chi.Router) {
-		r.Post("/", a.ingestRun)
-		r.Get("/", a.listRuns)
-		r.Get("/{id}", a.getRun)
-	})
+// MountRunReads attaches read-only run + SLO routes onto a chi router.
+func (a *API) MountRunReads(r chi.Router) {
+	r.Get("/api/v1/runs", a.listRuns)
+	r.Get("/api/v1/runs/{id}", a.getRun)
 	r.Get("/api/v1/scenarios/{name}/slo", a.scenarioSLO)
+}
+
+// MountRunWrites attaches run-ingestion routes onto a chi router.
+func (a *API) MountRunWrites(r chi.Router) {
+	r.Post("/api/v1/runs", a.ingestRun)
 }
 
 // ingestRun consumes a report.Report JSON body and persists it. The report's

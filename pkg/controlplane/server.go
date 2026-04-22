@@ -116,21 +116,29 @@ func (s *Server) routes() {
 	s.router.Get("/healthz", s.handleHealthz)
 	s.router.Method(http.MethodGet, "/metrics", s.metrics.Handler())
 
-	// Optional auth: mutating endpoints require editor; tokens management
-	// requires admin. When RequireAuth is false the API is fully open — handy
-	// for local dev and the in-process tests.
+	// Optional auth: writes are role-gated, while reads allow viewer access.
+	// When RequireAuth is false the API is fully open — handy for local dev and
+	// the in-process tests.
+	viewer := s.maybeRequire(storage.RoleViewer)
 	editor := s.maybeRequire(storage.RoleEditor)
 	admin := s.maybeRequire(storage.RoleAdmin)
 	worker := s.maybeRequire(storage.RoleWorker)
 
 	s.router.Group(func(r chi.Router) {
-		r.Use(editor)
-		s.api.MountScenarios(r)
+		r.Use(viewer)
+		s.api.MountScenarioReads(r)
+		s.api.MountRunReads(r)
+		s.api.MountWorkerReads(r)
 	})
 	s.router.Group(func(r chi.Router) {
 		r.Use(worker)
-		s.api.MountRuns(r)
-		s.api.MountWorkers(r)
+		s.api.MountRunWrites(r)
+		s.api.MountWorkerLifecycle(r)
+	})
+	s.router.Group(func(r chi.Router) {
+		r.Use(editor)
+		s.api.MountScenarioWrites(r)
+		s.api.MountWorkerWrites(r)
 	})
 	s.router.Group(func(r chi.Router) {
 		r.Use(admin)

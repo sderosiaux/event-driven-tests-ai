@@ -9,15 +9,21 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// MountWorkers wires worker registration + heartbeat + assignment endpoints.
-func (a *API) MountWorkers(r chi.Router) {
-	r.Route("/api/v1/workers", func(r chi.Router) {
-		r.Post("/register", a.registerWorker)
-		r.Get("/", a.listWorkers)
-		r.Post("/{id}/heartbeat", a.heartbeatWorker)
-		r.Get("/{id}/assignments", a.listAssignments)
-		r.Post("/{id}/assignments", a.assignScenario)
-	})
+// MountWorkerLifecycle wires worker self-service endpoints.
+func (a *API) MountWorkerLifecycle(r chi.Router) {
+	r.Post("/api/v1/workers/register", a.registerWorker)
+	r.Post("/api/v1/workers/{id}/heartbeat", a.heartbeatWorker)
+	r.Get("/api/v1/workers/{id}/assignments", a.listAssignments)
+}
+
+// MountWorkerReads wires read-only worker inventory endpoints.
+func (a *API) MountWorkerReads(r chi.Router) {
+	r.Get("/api/v1/workers", a.listWorkers)
+}
+
+// MountWorkerWrites wires assignment mutation endpoints.
+func (a *API) MountWorkerWrites(r chi.Router) {
+	r.Post("/api/v1/workers/{id}/assignments", a.assignScenario)
 }
 
 type registerRequest struct {

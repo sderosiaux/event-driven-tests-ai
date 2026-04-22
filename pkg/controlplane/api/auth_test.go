@@ -75,15 +75,20 @@ func TestViewerCanReadButNotWrite(t *testing.T) {
 	viewer, err := store.IssueToken(context.Background(), storage.RoleViewer, "")
 	require.NoError(t, err)
 
-	// Read access (worker rank > viewer means viewer is rejected on /runs which is gated at worker)
-	// Per current wiring, viewer can hit ListWorkers? No, that's worker-min.
-	// Adjust expectation: viewer fails on every gated endpoint. Confirm:
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/scenarios", nil)
 	req.Header.Set("Authorization", "Bearer "+viewer.Plaintext)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "viewer should not pass the editor gate on scenarios")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/scenarios", strings.NewReader(minimalYAML))
+	req2.Header.Set("Content-Type", "application/yaml")
+	req2.Header.Set("Authorization", "Bearer "+viewer.Plaintext)
+	resp2, err := http.DefaultClient.Do(req2)
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp2.StatusCode)
 }
 
 func TestAdminCanIssueAndRevokeToken(t *testing.T) {
@@ -118,4 +123,45 @@ func TestUIRemainsPublicEvenWithAuth(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestWorkerCanFetchAssignedScenarioButCannotAssignOne(t *testing.T) {
+	srv, store := newAuthServer(t)
+	workerTok, err := store.IssueToken(context.Background(), storage.RoleWorker, "")
+	require.NoError(t, err)
+	adminTok := "edt_admin_bootstrap"
+
+	reqCreate, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/scenarios", strings.NewReader(minimalYAML))
+	reqCreate.Header.Set("Content-Type", "application/yaml")
+	reqCreate.Header.Set("Authorization", "Bearer "+adminTok)
+	respCreate, err := http.DefaultClient.Do(reqCreate)
+	require.NoError(t, err)
+	respCreate.Body.Close()
+	require.Equal(t, http.StatusCreated, respCreate.StatusCode)
+
+	reqReg, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/workers/register", strings.NewReader(`{"labels":{"env":"test"}}`))
+	reqReg.Header.Set("Content-Type", "application/json")
+	reqReg.Header.Set("Authorization", "Bearer "+workerTok.Plaintext)
+	respReg, err := http.DefaultClient.Do(reqReg)
+	require.NoError(t, err)
+	defer respReg.Body.Close()
+	require.Equal(t, http.StatusCreated, respReg.StatusCode)
+	var reg map[string]any
+	require.NoError(t, json.NewDecoder(respReg.Body).Decode(&reg))
+	workerID := reg["worker_id"].(string)
+
+	reqGet, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/scenarios/demo", nil)
+	reqGet.Header.Set("Authorization", "Bearer "+workerTok.Plaintext)
+	respGet, err := http.DefaultClient.Do(reqGet)
+	require.NoError(t, err)
+	defer respGet.Body.Close()
+	assert.Equal(t, http.StatusOK, respGet.StatusCode)
+
+	reqAssign, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/workers/"+workerID+"/assignments", strings.NewReader(`{"scenario":"demo"}`))
+	reqAssign.Header.Set("Content-Type", "application/json")
+	reqAssign.Header.Set("Authorization", "Bearer "+workerTok.Plaintext)
+	respAssign, err := http.DefaultClient.Do(reqAssign)
+	require.NoError(t, err)
+	defer respAssign.Body.Close()
+	assert.Equal(t, http.StatusForbidden, respAssign.StatusCode)
 }
