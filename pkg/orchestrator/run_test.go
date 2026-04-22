@@ -1,0 +1,212 @@
+package orchestrator_test
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/event-driven-tests-ai/edt/pkg/events"
+	"github.com/event-driven-tests-ai/edt/pkg/httpc"
+	"github.com/event-driven-tests-ai/edt/pkg/kafka"
+	"github.com/event-driven-tests-ai/edt/pkg/orchestrator"
+	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// ---- fakes -----------------------------------------------------------------
+
+type fakeKafka struct {
+	mu          sync.Mutex
+	produced    []kafka.Record
+	consumeRecs []kafka.Record // records the fake will deliver to Consume()
+}
+
+func (f *fakeKafka) Produce(_ context.Context, r kafka.Record) (kafka.Record, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.produced = append(f.produced, r)
+	r.Partition = 0
+	r.Offset = int64(len(f.produced) - 1)
+	r.Timestamp = time.Now().UnixNano()
+	return r, nil
+}
+func (f *fakeKafka) Consume(ctx context.Context, fn func(kafka.Record) error) error {
+	f.mu.Lock()
+	recs := append([]kafka.Record(nil), f.consumeRecs...)
+	f.mu.Unlock()
+	for _, r := range recs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(r); err != nil {
+			return err
+		}
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (f *fakeKafka) Close() {}
+
+type fakeHTTP struct{ next *httpc.Response; err error }
+
+func (f *fakeHTTP) Do(_ context.Context, _ *scenario.HTTPStep) (*httpc.Response, error) {
+	return f.next, f.err
+}
+
+// ---- tests -----------------------------------------------------------------
+
+func TestProduceCount(t *testing.T) {
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{}
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{Steps: []scenario.Step{{
+			Name:    "p",
+			Produce: &scenario.ProduceStep{Topic: "orders", Payload: `{"x":1}`, Count: 5},
+		}}},
+	}
+	require.NoError(t, r.Run(context.Background(), s))
+	assert.Len(t, fk.produced, 5)
+	assert.Len(t, store.Query("orders"), 5)
+}
+
+func TestProduceWithGenerator(t *testing.T) {
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{}
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{
+			Data: map[string]scenario.Data{
+				"orders": {Generator: scenario.Generator{
+					Strategy: "faker", Seed: 42,
+					Overrides: map[string]string{
+						"orderId": "${uuid()}",
+						"amount":  "${faker.number.float(10, 100)}",
+					},
+				}},
+			},
+			Steps: []scenario.Step{{
+				Name:    "p",
+				Produce: &scenario.ProduceStep{Topic: "orders", Payload: "${data.orders}", Count: 3},
+			}},
+		},
+	}
+	r := orchestrator.New(s, fk, nil, store)
+	require.NoError(t, r.Run(context.Background(), s))
+
+	require.Len(t, fk.produced, 3)
+	for _, rec := range fk.produced {
+		assert.NotEmpty(t, rec.Key, "orderId should populate the key")
+		assert.NotEmpty(t, rec.Value)
+	}
+}
+
+func TestProduceRateThrottles(t *testing.T) {
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{}
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{Steps: []scenario.Step{{
+			Name: "p",
+			Produce: &scenario.ProduceStep{
+				Topic: "t", Payload: `{"k":1}`,
+				Count: 5, Rate: "10/s", // ~100ms between produces, ~400ms total
+			},
+		}}},
+	}
+	t0 := time.Now()
+	require.NoError(t, r.Run(context.Background(), s))
+	elapsed := time.Since(t0)
+	assert.GreaterOrEqual(t, elapsed, 350*time.Millisecond, "5 records at 10/s must take ~400ms (4 gaps)")
+}
+
+func TestConsumeRecordsEvents(t *testing.T) {
+	now := time.Now()
+	fk := &fakeKafka{
+		consumeRecs: []kafka.Record{
+			{Topic: "orders.ack", Key: []byte("1"), Value: []byte(`{"orderId":"1"}`), Timestamp: now.UnixNano()},
+			{Topic: "orders.ack", Key: []byte("2"), Value: []byte(`{"orderId":"2"}`), Timestamp: now.UnixNano()},
+		},
+	}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{Steps: []scenario.Step{{
+			Name:    "c",
+			Consume: &scenario.ConsumeStep{Topic: "orders.ack", Group: "g", Timeout: "100ms"},
+		}}},
+	}
+	require.NoError(t, r.Run(context.Background(), s))
+	got := store.Query("orders.ack")
+	assert.Len(t, got, 2)
+}
+
+func TestHTTPStepRecordsAndChecksExpect(t *testing.T) {
+	fh := &fakeHTTP{next: &httpc.Response{Status: 200, Body: map[string]any{"ok": true}, Latency: 12 * time.Millisecond}}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, nil, fh, store)
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{Steps: []scenario.Step{{
+			Name: "h",
+			HTTP: &scenario.HTTPStep{
+				Method: "GET", Path: "/health",
+				Expect: &scenario.HTTPExpect{Status: 200},
+			},
+		}}},
+	}
+	require.NoError(t, r.Run(context.Background(), s))
+	got := store.Query("http:/health")
+	require.Len(t, got, 1)
+}
+
+func TestHTTPExpectFailureSurfaces(t *testing.T) {
+	fh := &fakeHTTP{next: &httpc.Response{Status: 500}}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, nil, fh, store)
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{Steps: []scenario.Step{{
+			Name: "h",
+			HTTP: &scenario.HTTPStep{Method: "GET", Path: "/x", Expect: &scenario.HTTPExpect{Status: 200}},
+		}}},
+	}
+	err := r.Run(context.Background(), s)
+	require.Error(t, err)
+}
+
+func TestSleepStep(t *testing.T) {
+	r := orchestrator.New(&scenario.Scenario{}, nil, nil, events.NewMemStore(0))
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{Name: "s", Sleep: "50ms"}}}}
+	t0 := time.Now()
+	require.NoError(t, r.Run(context.Background(), s))
+	assert.GreaterOrEqual(t, time.Since(t0), 50*time.Millisecond)
+}
+
+func TestProduceErrorIsRecordedAsFailedEvent(t *testing.T) {
+	fk := &errKafka{err: errors.New("broker_not_available")}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name:    "p",
+		Produce: &scenario.ProduceStep{Topic: "t", Payload: `{"k":1}`, Count: 2},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	got := store.Query("t")
+	require.Len(t, got, 2)
+	for _, e := range got {
+		assert.Equal(t, events.ProducedFailed, e.Direction)
+	}
+}
+
+type errKafka struct{ err error }
+
+func (e *errKafka) Produce(_ context.Context, r kafka.Record) (kafka.Record, error) { return r, e.err }
+func (e *errKafka) Consume(ctx context.Context, _ func(kafka.Record) error) error    { <-ctx.Done(); return ctx.Err() }
+func (e *errKafka) Close()                                                            {}
