@@ -20,7 +20,13 @@ func newServeCmd() *cobra.Command {
 			if cfg.AdminToken == "" {
 				cfg.AdminToken = os.Getenv("EDT_ADMIN_TOKEN")
 			}
-			s := controlplane.NewServer(cfg)
+			if cfg.DBURL == "" {
+				cfg.DBURL = os.Getenv("EDT_DB_URL")
+			}
+			s, err := controlplane.NewServerAuto(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
 			return s.Run(cmd.Context())
 		},
 	}

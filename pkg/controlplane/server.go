@@ -63,6 +63,20 @@ func NewServer(cfg Config) *Server {
 	return s
 }
 
+// NewServerAuto picks a backend from cfg: Postgres when DBURL is set,
+// in-memory otherwise. Returns the constructed Server or an error if the
+// Postgres backend cannot be opened.
+func NewServerAuto(ctx context.Context, cfg Config) (*Server, error) {
+	if cfg.DBURL == "" {
+		return NewServer(cfg), nil
+	}
+	pg, err := storage.NewPGStore(ctx, cfg.DBURL)
+	if err != nil {
+		return nil, err
+	}
+	return NewServerWithStorage(cfg, pg), nil
+}
+
 // NewServerWithStorage lets callers (tests, future Postgres entrypoint) inject
 // a Storage rather than the default in-memory store.
 func NewServerWithStorage(cfg Config, store storage.Storage) *Server {
