@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/api"
+	"github.com/event-driven-tests-ai/edt/pkg/controlplane/metrics"
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -26,11 +27,12 @@ type Config struct {
 
 // Server is the long-running control-plane process.
 type Server struct {
-	cfg    Config
-	router chi.Router
-	httpd  *http.Server
-	store  storage.Storage
-	api    *api.API
+	cfg     Config
+	router  chi.Router
+	httpd   *http.Server
+	store   storage.Storage
+	api     *api.API
+	metrics *metrics.Registry
 }
 
 // NewServer wires the router and middleware. It does not bind the listener;
@@ -50,7 +52,8 @@ func NewServer(cfg Config) *Server {
 	r.Use(middleware.Timeout(30 * time.Second))
 
 	store := storage.NewMemStore() // M2 default; Postgres backend lands in M2-T2b.
-	s := &Server{cfg: cfg, router: r, store: store, api: api.New(store)}
+	mreg := metrics.New()
+	s := &Server{cfg: cfg, router: r, store: store, api: api.NewWithMetrics(store, mreg), metrics: mreg}
 	s.routes()
 	return s
 }
@@ -69,13 +72,15 @@ func NewServerWithStorage(cfg Config, store storage.Storage) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	s := &Server{cfg: cfg, router: r, store: store, api: api.New(store)}
+	mreg := metrics.New()
+	s := &Server{cfg: cfg, router: r, store: store, api: api.NewWithMetrics(store, mreg), metrics: mreg}
 	s.routes()
 	return s
 }
 
 func (s *Server) routes() {
 	s.router.Get("/healthz", s.handleHealthz)
+	s.router.Method(http.MethodGet, "/metrics", s.metrics.Handler())
 	s.api.MountScenarios(s.router)
 	s.api.MountRuns(s.router)
 }

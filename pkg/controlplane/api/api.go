@@ -8,15 +8,35 @@ import (
 	"net/http"
 
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
+	"github.com/event-driven-tests-ai/edt/pkg/report"
 )
 
 // API holds the dependencies shared across handlers.
 type API struct {
-	Store storage.Storage
+	Store   storage.Storage
+	Metrics MetricsObserver
 }
 
-// New builds an API bound to the given Storage.
-func New(s storage.Storage) *API { return &API{Store: s} }
+// MetricsObserver lets the API update Prometheus collectors without importing
+// the metrics package directly (avoids a hard dependency for tests).
+type MetricsObserver interface {
+	ObserveRun(*report.Report)
+}
+
+// New builds an API bound to the given Storage with no metrics hook.
+func New(s storage.Storage) *API { return &API{Store: s, Metrics: noopObserver{}} }
+
+// NewWithMetrics binds a Storage and a metrics observer.
+func NewWithMetrics(s storage.Storage, m MetricsObserver) *API {
+	if m == nil {
+		m = noopObserver{}
+	}
+	return &API{Store: s, Metrics: m}
+}
+
+type noopObserver struct{}
+
+func (noopObserver) ObserveRun(*report.Report) {}
 
 // writeJSON serialises v as JSON. It is the canonical response helper used
 // across all handlers so all responses carry a consistent Content-Type.

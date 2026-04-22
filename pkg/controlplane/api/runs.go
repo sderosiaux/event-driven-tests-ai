@@ -67,6 +67,9 @@ func (a *API) ingestRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if a.Metrics != nil {
+		a.Metrics.ObserveRun(&rep)
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"run_id":   rep.RunID,
 		"scenario": rep.Scenario,
