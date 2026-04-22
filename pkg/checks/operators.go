@@ -15,14 +15,18 @@ import (
 // storeFunctions returns the cel.EnvOption list registering all streaming
 // operators bound to the given store.
 //
-// Phase 1 (this commit): stream, percentile, rate.
-// Phase 2 (next task):   latency, forall, exists, before.
+// Built-in CEL already provides `.all(e, P)` and `.exists(e, P)` macros for
+// list traversal, so this package does not introduce a separate forall/exists.
+// The "forall e in stream('x'): P" DSL prose documented in the design spec
+// translates to CEL `stream('x').all(e, P)`.
 func storeFunctions(store events.Store) []cel.EnvOption {
 	return []cel.EnvOption{
 		fnStream(store),
 		fnPercentileDouble(),
 		fnPercentileDuration(),
 		fnRate(),
+		fnLatency(store),
+		fnBefore(),
 	}
 }
 
@@ -95,6 +99,85 @@ func fnPercentileDuration() cel.EnvOption {
 			}),
 		),
 	)
+}
+
+// fnLatency registers `latency(fromStream, toStream string) -> list<duration>`.
+// For each event in fromStream, finds the earliest event in toStream sharing the
+// same Key with Ts >= the source Ts, and emits the time difference. Unmatched
+// source events are skipped (not zeroed). Order: ascending by source Ts.
+func fnLatency(store events.Store) cel.EnvOption {
+	return cel.Function("latency",
+		cel.Overload("latency_string_string",
+			[]*cel.Type{cel.StringType, cel.StringType},
+			cel.ListType(cel.DurationType),
+			cel.BinaryBinding(func(from, to ref.Val) ref.Val {
+				fromName, ok := from.Value().(string)
+				if !ok {
+					return types.NewErr("latency: from must be string, got %T", from.Value())
+				}
+				toName, ok := to.Value().(string)
+				if !ok {
+					return types.NewErr("latency: to must be string, got %T", to.Value())
+				}
+				src := store.Query(fromName)
+				dst := store.Query(toName)
+				out := make([]any, 0, len(src))
+				for _, s := range src {
+					match := earliestMatchingEvent(dst, s.Key, s.Ts)
+					if match == nil {
+						continue
+					}
+					d := match.Ts.Sub(s.Ts)
+					if d < 0 {
+						d = 0
+					}
+					out = append(out, d)
+				}
+				return types.DefaultTypeAdapter.NativeToValue(out)
+			}),
+		),
+	)
+}
+
+// fnBefore registers `before(t1, t2 timestamp) -> bool` as syntactic sugar
+// for `t1 < t2`. Reads more naturally in scenario checks.
+func fnBefore() cel.EnvOption {
+	return cel.Function("before",
+		cel.Overload("before_timestamp_timestamp",
+			[]*cel.Type{cel.TimestampType, cel.TimestampType},
+			cel.BoolType,
+			cel.BinaryBinding(func(a, b ref.Val) ref.Val {
+				ta, ok := a.Value().(time.Time)
+				if !ok {
+					return types.NewErr("before: a must be timestamp, got %T", a.Value())
+				}
+				tb, ok := b.Value().(time.Time)
+				if !ok {
+					return types.NewErr("before: b must be timestamp, got %T", b.Value())
+				}
+				return types.Bool(ta.Before(tb))
+			}),
+		),
+	)
+}
+
+// earliestMatchingEvent returns the first event in evs with the given key whose
+// Ts is >= notBefore, or nil if none match.
+func earliestMatchingEvent(evs []events.Event, key string, notBefore time.Time) *events.Event {
+	var best *events.Event
+	for i := range evs {
+		e := &evs[i]
+		if e.Key != key {
+			continue
+		}
+		if e.Ts.Before(notBefore) {
+			continue
+		}
+		if best == nil || e.Ts.Before(best.Ts) {
+			best = e
+		}
+	}
+	return best
 }
 
 // fnRate registers `rate(list<bool>) -> double` — fraction of true values in [0, 1].
