@@ -110,7 +110,7 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 		if err != nil {
 			return err
 		}
-		valueBytes, _ := json.Marshal(payload)
+		valueBytes := encodeWireValue(payload)
 
 		key := p.Key
 		if key == "" {
@@ -319,7 +319,8 @@ func (r *Runner) runHTTP(ctx context.Context, step *scenario.Step) error {
 
 // resolvePayload turns the produce.payload string into a value.
 // "${data.<name>}" looks up the named generator and runs Generate().
-// Anything else is returned as a raw string.
+// Anything that looks like a JSON object or array is parsed so the wire payload
+// is not double-encoded later. Anything else is returned as a raw string.
 func (r *Runner) resolvePayload(spec string) (any, error) {
 	const prefix = "${data."
 	if strings.HasPrefix(spec, prefix) && strings.HasSuffix(spec, "}") {
@@ -330,7 +331,38 @@ func (r *Runner) resolvePayload(spec string) (any, error) {
 		}
 		return gen.Generate()
 	}
+	if looksLikeJSON(spec) {
+		var v any
+		if err := json.Unmarshal([]byte(spec), &v); err == nil {
+			return v, nil
+		}
+		// Fallthrough: leave the raw string if it isn't valid JSON.
+	}
 	return spec, nil
+}
+
+func looksLikeJSON(s string) bool {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return false
+	}
+	switch t[0] {
+	case '{', '[':
+		return true
+	default:
+		return false
+	}
+}
+
+// encodeWireValue serializes a payload for Kafka. Strings travel as raw bytes
+// so plain text payloads do not gain extra JSON quotes; everything else is
+// JSON-encoded (objects, arrays, numbers, bools).
+func encodeWireValue(payload any) []byte {
+	if s, ok := payload.(string); ok {
+		return []byte(s)
+	}
+	b, _ := json.Marshal(payload)
+	return b
 }
 
 // parseRate turns "50/s" into the per-record sleep duration. "" → 0 (no throttle).

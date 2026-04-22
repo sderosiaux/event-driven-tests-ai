@@ -65,6 +65,41 @@ func (f *fakeHTTP) Do(_ context.Context, _ *scenario.HTTPStep) (*httpc.Response,
 
 // ---- tests -----------------------------------------------------------------
 
+// Regression: codex P0 — inline JSON payloads must not be wrapped in JSON quotes.
+func TestProduceInlineJSONIsNotDoubleEncoded(t *testing.T) {
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{}
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{Steps: []scenario.Step{{
+			Name:    "p",
+			Produce: &scenario.ProduceStep{Topic: "orders", Payload: `{"orderId":"abc","amount":99.5}`, Count: 1},
+		}}},
+	}
+	require.NoError(t, r.Run(context.Background(), s))
+	require.Len(t, fk.produced, 1)
+	value := string(fk.produced[0].Value)
+	assert.Equal(t, `{"amount":99.5,"orderId":"abc"}`, value, "JSON object literal must travel as raw object bytes")
+	assert.Equal(t, []byte("abc"), fk.produced[0].Key, "key derived from payload.orderId")
+}
+
+func TestProducePlainStringPayloadStaysString(t *testing.T) {
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{}
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+
+	s := &scenario.Scenario{
+		Spec: scenario.Spec{Steps: []scenario.Step{{
+			Name:    "p",
+			Produce: &scenario.ProduceStep{Topic: "logs", Payload: `hello world`, Count: 1},
+		}}},
+	}
+	require.NoError(t, r.Run(context.Background(), s))
+	require.Len(t, fk.produced, 1)
+	assert.Equal(t, []byte(`hello world`), fk.produced[0].Value, "plain string payload travels verbatim")
+}
+
 func TestProduceCount(t *testing.T) {
 	store := events.NewMemStore(0)
 	fk := &fakeKafka{}
