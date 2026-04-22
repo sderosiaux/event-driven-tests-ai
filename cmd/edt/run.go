@@ -103,6 +103,7 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 	// Orchestrate.
 	store := events.NewMemStore(0)
 	runner := orchestrator.New(s, kp, hp, store)
+	runner.RunID = runID
 	if err := runner.Run(ctx, s); err != nil {
 		rep.Error = err.Error()
 	}

@@ -156,19 +156,37 @@ func CheckExpectation(exp *scenario.HTTPExpect, r *Response) error {
 	return nil
 }
 
-// matchValue dispatches on the shape of `want`: a map containing exactly one
-// matcher key (in/regex/gt/lt/gte/lte) is treated as a matcher; anything else
-// falls back to JSON-normalized equality.
+// matchValue dispatches on the shape of `want`:
+//   - {$literal: V} escapes to deep equality against V (use when the response
+//     legitimately contains a single-key object such as {in: [...]})
+//   - {<op>: arg} where op ∈ {in, regex, gt, lt, gte, lte} is a matcher
+//   - anything else falls back to JSON-normalized equality
 func matchValue(got, want any) error {
 	if m, ok := want.(map[string]any); ok && len(m) == 1 {
+		if lit, ok := m["$literal"]; ok {
+			if !equalAny(got, lit) {
+				return fmt.Errorf("literal: want %v, got %v", lit, got)
+			}
+			return nil
+		}
 		for op, arg := range m {
-			return applyMatcher(op, arg, got)
+			if isMatcherOp(op) {
+				return applyMatcher(op, arg, got)
+			}
 		}
 	}
 	if !equalAny(got, want) {
 		return fmt.Errorf("want %v, got %v", want, got)
 	}
 	return nil
+}
+
+func isMatcherOp(op string) bool {
+	switch op {
+	case "in", "regex", "gt", "lt", "gte", "lte":
+		return true
+	}
+	return false
 }
 
 func applyMatcher(op string, arg, got any) error {
@@ -223,11 +241,7 @@ func applyMatcher(op string, arg, got any) error {
 		}
 		return fmt.Errorf("value %v not %s %v", got, op, arg)
 	default:
-		// Unknown operator → treat the whole map as a literal equality target.
-		if !equalAny(got, map[string]any{op: arg}) {
-			return fmt.Errorf("unknown matcher %q (and value did not match literally)", op)
-		}
-		return nil
+		return fmt.Errorf("unknown matcher %q", op)
 	}
 }
 

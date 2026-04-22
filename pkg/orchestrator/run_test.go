@@ -3,6 +3,8 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +17,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 // ---- fakes -----------------------------------------------------------------
 
@@ -208,6 +217,74 @@ func TestConsumeTimeoutWithNoMatchIsError(t *testing.T) {
 	err := r.Run(context.Background(), s)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timed out")
+}
+
+// Codex S01/S02: match rules must see `previous` and `run` from earlier steps.
+func TestConsumeMatchUsesPreviousFromProduce(t *testing.T) {
+	now := time.Now()
+	fk := &fakeKafka{
+		consumeRecs: []kafka.Record{
+			{Topic: "orders.ack", Key: []byte("nope"), Value: []byte(`{"orderId":"nope"}`), Timestamp: now.UnixNano()},
+			{Topic: "orders.ack", Key: []byte("abc"), Value: []byte(`{"orderId":"abc"}`), Timestamp: now.UnixNano()},
+			{Topic: "orders.ack", Key: []byte("zzz"), Value: []byte(`{"orderId":"zzz"}`), Timestamp: now.UnixNano()},
+		},
+	}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{
+		{
+			Name: "place",
+			Produce: &scenario.ProduceStep{
+				Topic: "orders", Payload: `{"orderId":"abc"}`, Count: 1,
+			},
+		},
+		{
+			Name: "wait",
+			Consume: &scenario.ConsumeStep{
+				Topic: "orders.ack", Timeout: "200ms",
+				Match: []scenario.MatchRule{{Key: `payload.orderId == previous.orderId`}},
+			},
+		},
+	}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	got := store.Query("orders.ack")
+	require.Len(t, got, 2, "should stop on the record matching previous.orderId == 'abc'")
+}
+
+// Codex S01/S02: ${previous.X} and ${run.id} substitute in topic, group, http.path, http.body.
+func TestInterpolationInTopicGroupHTTPPath(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"path":"` + req.URL.Path + `"}`))
+	})
+
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{}
+	r := orchestrator.New(&scenario.Scenario{}, fk, httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL}), store)
+	r.RunID = "r-test-9"
+
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{
+		{
+			Name: "p",
+			Produce: &scenario.ProduceStep{
+				Topic: "orders", Payload: `{"orderId":"abc"}`, Count: 1,
+			},
+		},
+		{
+			Name: "h",
+			HTTP: &scenario.HTTPStep{
+				Method: "GET",
+				Path:   "/orders/${previous.orderId}/by/${run.id}",
+			},
+		},
+	}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	httpEvents := store.Query("http:/orders/${previous.orderId}/by/${run.id}")
+	require.Empty(t, httpEvents, "stream key uses raw template (pre-interpolation)")
+	httpEventsResolved := store.Query("http:/orders/abc/by/r-test-9")
+	require.Len(t, httpEventsResolved, 1, "interpolated path should be the actual stream key")
+	body := httpEventsResolved[0].Payload.(map[string]any)["body"].(map[string]any)
+	assert.Equal(t, "/orders/abc/by/r-test-9", body["path"])
 }
 
 // Regression: codex P0 — match rules must filter and the rule must be evaluated against payload.

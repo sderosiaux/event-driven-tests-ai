@@ -4,18 +4,24 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/scenario"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // Client is the edt-facing wrapper around a *kgo.Client.
-// One client per scenario run holds the long-lived producer; each call to
-// Consume builds a fresh subscriber so per-step subscriptions are isolated.
+// One client per scenario run holds the long-lived producer; consumers are
+// cached per (group, topic) so multiple consume steps reusing the same group
+// do not thrash the consumer-group coordinator with join/leave cycles.
 type Client struct {
 	cl       *kgo.Client // producer (long-lived)
 	seeds    []string    // captured for building per-step consumers
 	authOpts []kgo.Opt   // captured for building per-step consumers
+
+	mu          sync.Mutex
+	subscribers map[string]*kgo.Client // key = "group|topic"
 }
 
 // Record is the subset of kgo.Record edt callers interact with.
@@ -51,14 +57,44 @@ func NewClient(c *scenario.KafkaConnector) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kafka: build producer: %w", err)
 	}
-	return &Client{cl: cl, seeds: seeds, authOpts: authOpts}, nil
+	return &Client{
+		cl:          cl,
+		seeds:       seeds,
+		authOpts:    authOpts,
+		subscribers: make(map[string]*kgo.Client),
+	}, nil
 }
 
-// Close flushes any in-flight produces and releases connections.
+// Close flushes any in-flight produces, commits any pending consumer offsets,
+// leaves consumer groups cleanly, and releases all connections.
 func (c *Client) Close() {
+	c.mu.Lock()
+	subs := c.subscribers
+	c.subscribers = nil
+	c.mu.Unlock()
+
+	for key, sub := range subs {
+		closeSubscriber(sub, key)
+	}
 	if c.cl != nil {
 		c.cl.Close()
 	}
+}
+
+// closeSubscriber commits in-memory offsets and leaves the group before
+// closing the kgo.Client. A short bounded timeout protects against a hung
+// coordinator. Errors are intentionally swallowed — Close is always best-effort.
+func closeSubscriber(sub *kgo.Client, key string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Commit any uncommitted offsets so the next Consume reusing the same
+	// group does not re-read the tail of the topic. Safe to call even on a
+	// non-grouped subscriber (it's a no-op).
+	if strings.Contains(key, "|") && !strings.HasPrefix(key, "|") {
+		_ = sub.CommitUncommittedOffsets(ctx)
+	}
+	sub.Close()
 }
 
 // Ping verifies connectivity to the seed brokers — useful as a precheck
@@ -98,24 +134,20 @@ type ConsumeRequest struct {
 	Group string // optional; empty = direct (no group) consumption
 }
 
-// Consume builds a fresh subscriber for the given request and invokes fn for
-// each fetched record until ctx is cancelled or fn returns an error.
-// Fetch-level errors (broker down, auth failure, unknown topic) are surfaced
-// as a wrapped error rather than degraded into "no records until timeout".
+// Consume invokes fn for each record fetched from the requested topic until
+// ctx is cancelled or fn returns an error. Subscribers are cached by
+// (group, topic), so repeated consume steps using the same group do not
+// trigger a fresh join/sync/leave cycle each time. Fetch-level errors
+// (broker down, auth failure, unknown topic) are surfaced as a wrapped error
+// rather than degraded into "no records until timeout".
 func (c *Client) Consume(ctx context.Context, req ConsumeRequest, fn func(Record) error) error {
 	if req.Topic == "" {
 		return fmt.Errorf("kafka: consume requires a topic")
 	}
-	opts := append([]kgo.Opt{kgo.SeedBrokers(c.seeds...)}, c.authOpts...)
-	opts = append(opts, kgo.ConsumeTopics(req.Topic))
-	if req.Group != "" {
-		opts = append(opts, kgo.ConsumerGroup(req.Group))
-	}
-	sub, err := kgo.NewClient(opts...)
+	sub, err := c.subscriberFor(req)
 	if err != nil {
-		return fmt.Errorf("kafka: build subscriber: %w", err)
+		return err
 	}
-	defer sub.Close()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -154,6 +186,32 @@ func (c *Client) Consume(ctx context.Context, req ConsumeRequest, fn func(Record
 			}
 		}
 	}
+}
+
+// subscriberFor returns a (group, topic)-scoped subscriber, building it on
+// first use and reusing it on subsequent calls.
+func (c *Client) subscriberFor(req ConsumeRequest) (*kgo.Client, error) {
+	key := req.Group + "|" + req.Topic
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.subscribers == nil {
+		// Client was already Closed.
+		return nil, fmt.Errorf("kafka: client is closed")
+	}
+	if sub, ok := c.subscribers[key]; ok {
+		return sub, nil
+	}
+	opts := append([]kgo.Opt{kgo.SeedBrokers(c.seeds...)}, c.authOpts...)
+	opts = append(opts, kgo.ConsumeTopics(req.Topic))
+	if req.Group != "" {
+		opts = append(opts, kgo.ConsumerGroup(req.Group))
+	}
+	sub, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("kafka: build subscriber: %w", err)
+	}
+	c.subscribers[key] = sub
+	return sub, nil
 }
 
 func splitServers(s string) []string {

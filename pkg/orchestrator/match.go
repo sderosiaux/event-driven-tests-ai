@@ -20,7 +20,11 @@ func compileMatcher(rules []scenario.MatchRule) (*matcher, error) {
 	if len(rules) == 0 {
 		return nil, nil
 	}
-	env, err := cel.NewEnv(cel.Variable("payload", cel.DynType))
+	env, err := cel.NewEnv(
+		cel.Variable("payload", cel.DynType),
+		cel.Variable("previous", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("run", cel.MapType(cel.StringType, cel.DynType)),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -50,9 +54,21 @@ func filterNonEmpty(rs []scenario.MatchRule) []scenario.MatchRule {
 }
 
 // matches returns true if any rule evaluates to true on the payload.
-func (m *matcher) matches(payload any) (bool, error) {
+// previous and run carry the running-step context exposed by interpCtx; they
+// may be nil when no prior step has emitted vars.
+func (m *matcher) matches(payload any, previous, run map[string]any) (bool, error) {
+	if previous == nil {
+		previous = map[string]any{}
+	}
+	if run == nil {
+		run = map[string]any{}
+	}
 	for _, p := range m.programs {
-		v, _, err := p.Eval(map[string]any{"payload": payload})
+		v, _, err := p.Eval(map[string]any{
+			"payload":  payload,
+			"previous": previous,
+			"run":      run,
+		})
 		if err != nil {
 			return false, err
 		}

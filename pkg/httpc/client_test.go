@@ -133,6 +133,28 @@ func TestExpectMatcherRegex(t *testing.T) {
 	}, resp))
 }
 
+// Codex N01: an HTTP body that legitimately is a single-key {in:[...]} object
+// must be assertable via the $literal escape.
+func TestExpectLiteralEscapesMatcherShape(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"filter":{"in":[1,2,3]}}`))
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	resp, _ := c.Do(context.Background(), &scenario.HTTPStep{Path: "/x"})
+
+	// Without $literal this would be parsed as a matcher and fail because the
+	// list has integers and the matcher would compare against a JSON value.
+	assert.NoError(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{
+			"filter": map[string]any{
+				"$literal": map[string]any{"in": []any{1, 2, 3}},
+			},
+		},
+	}, resp))
+}
+
 func TestExpectMatcherGtLte(t *testing.T) {
 	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

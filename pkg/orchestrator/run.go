@@ -20,11 +20,14 @@ import (
 
 // Runner executes a scenario's steps and records observed events.
 type Runner struct {
-	Kafka     KafkaPort
-	HTTP      HTTPPort
-	Store     events.Store
+	Kafka      KafkaPort
+	HTTP       HTTPPort
+	Store      events.Store
 	Generators map[string]*data.FakerGenerator // keyed by data alias from scenario.Spec.Data
-	Logger    func(format string, args ...any) // optional, defaults to no-op
+	Logger     func(format string, args ...any) // optional, defaults to no-op
+	RunID      string                            // injected as ${run.id} for interpolation
+
+	interp *interpCtx
 }
 
 // New builds a Runner from the live connectors. Tests can construct a Runner
@@ -46,6 +49,9 @@ func New(s *scenario.Scenario, kc KafkaPort, hc HTTPPort, store events.Store) *R
 
 // Run executes the scenario steps in declaration order.
 func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) error {
+	if r.interp == nil {
+		r.interp = newInterpCtx(r.RunID, time.Now().UTC().Format(time.RFC3339))
+	}
 	for i := range s.Spec.Steps {
 		step := &s.Spec.Steps[i]
 		if err := r.runStep(ctx, step); err != nil {
@@ -109,13 +115,14 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		payload, err := r.resolvePayload(p.Payload)
+		expandedPayload := r.interp.expand(p.Payload)
+		payload, err := r.resolvePayload(expandedPayload)
 		if err != nil {
 			return err
 		}
 		valueBytes := encodeWireValue(payload)
 
-		key := p.Key
+		key := r.interp.expand(p.Key)
 		if key == "" {
 			if m, ok := payload.(map[string]any); ok {
 				if v, ok := m["orderId"]; ok {
@@ -167,6 +174,7 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 				Payload:   payload,
 				Direction: direction,
 			})
+			r.interp.recordPrevious(previousFromPayload(string(out.Key), payload))
 		}
 
 		if tickEvery > 0 && i < count-1 {
@@ -191,6 +199,21 @@ func nonEmptyOr(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+// previousFromPayload flattens a step's emitted record into a map suitable
+// for ${previous.X} substitution and CEL `previous` access. Top-level fields
+// of the payload are merged in; the record key is exposed as `key`.
+func previousFromPayload(key string, payload any) map[string]any {
+	out := map[string]any{"key": key}
+	if m, ok := payload.(map[string]any); ok {
+		for k, v := range m {
+			out[k] = v
+		}
+	} else {
+		out["payload"] = payload
+	}
+	return out
 }
 
 // corruptValue returns a deliberately damaged copy of v: the first half of the
@@ -226,6 +249,9 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	topic := r.interp.expand(c.Topic)
+	group := r.interp.expand(c.Group)
+
 	// Compile match rules once; nil matcher = "any record from the topic ends the step".
 	m, err := compileMatcher(c.Match)
 	if err != nil {
@@ -248,10 +274,10 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 	consumed := 0
 	matched := false
 
-	consumeErr := r.Kafka.Consume(cctx, kafka.ConsumeRequest{Topic: c.Topic, Group: c.Group}, func(rec kafka.Record) error {
+	consumeErr := r.Kafka.Consume(cctx, kafka.ConsumeRequest{Topic: topic, Group: group}, func(rec kafka.Record) error {
 		// Defensive: ignore records from any other topic the underlying
 		// subscriber may have leaked (it should not, but cheap to guard).
-		if rec.Topic != c.Topic {
+		if rec.Topic != topic {
 			return nil
 		}
 		payload := decodeConsumedValue(rec.Value)
@@ -266,17 +292,19 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 		consumed++
 
 		if m != nil {
-			ok, err := m.matches(payload)
+			ok, err := m.matches(payload, r.interp.previous, r.interp.run)
 			if err != nil {
 				return fmt.Errorf("match rule eval: %w", err)
 			}
 			if ok {
 				matched = true
+				r.interp.recordPrevious(previousFromPayload(string(rec.Key), payload))
 				return errMatched
 			}
 		} else {
 			// No rules → first record is enough to advance the step.
 			matched = true
+			r.interp.recordPrevious(previousFromPayload(string(rec.Key), payload))
 			return errMatched
 		}
 
@@ -297,7 +325,7 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 		// Match happened but consume returned ctx error first — that's still a pass.
 		return nil
 	case errors.Is(consumeErr, context.DeadlineExceeded):
-		return fmt.Errorf("consume timed out after %s with %d record(s) seen and no match", timeout, consumed)
+		return fmt.Errorf("consume timed out after %s with %d record(s) seen and no match for topic %q", timeout, consumed, topic)
 	case errors.Is(consumeErr, context.Canceled):
 		return consumeErr
 	case consumeErr != nil:
@@ -317,6 +345,17 @@ func (r *Runner) runHTTP(ctx context.Context, step *scenario.Step) error {
 	if err := validateHTTPFailMode(h.FailMode); err != nil {
 		return err
 	}
+	// Apply ${run.X} / ${previous.X} interpolation to dynamic string fields.
+	expanded := *h
+	expanded.Path = r.interp.expand(h.Path)
+	expanded.Body = r.interp.expand(h.Body)
+	if len(h.Headers) > 0 {
+		expanded.Headers = make(map[string]string, len(h.Headers))
+		for k, v := range h.Headers {
+			expanded.Headers[k] = r.interp.expand(v)
+		}
+	}
+	h = &expanded
 
 	// Deterministic per-step RNG so fail_rate sequences are reproducible.
 	rng := mrand.New(mrand.NewSource(int64(fnv32(step.Name))))
@@ -361,6 +400,10 @@ func (r *Runner) runHTTP(ctx context.Context, step *scenario.Step) error {
 			return fmt.Errorf("http expect: %w", err)
 		}
 	}
+	r.interp.recordPrevious(map[string]any{
+		"status": resp.Status,
+		"body":   resp.Body,
+	})
 	return nil
 }
 

@@ -194,6 +194,25 @@ spec:
       severity: critical
 ```
 
+### 6.2.1 Interpolation
+
+Two namespaces are exposed via `${...}` substitution in string fields
+(`topic`, `group`, `key`, `payload`, `path`, `body`, header values):
+
+| Reference            | Source                                       |
+|----------------------|----------------------------------------------|
+| `${run.id}`          | Unique scenario-run identifier               |
+| `${run.startedAt}`   | RFC3339 UTC timestamp of run start           |
+| `${previous.<k>}`    | Field from the last completed step           |
+
+`previous` is also injected into the CEL environment used by `consume.match`
+rules, so authors can write `payload.orderId == previous.orderId` directly
+without `${}` syntax. Match expressions can additionally read `previous` and
+`run` as nested maps.
+
+Unknown references are left literal so non-template strings (e.g. JSON body
+fragments containing `${something}`) pass through unchanged.
+
 ### 6.3 DSL sections
 
 | Section | Purpose | Required |
