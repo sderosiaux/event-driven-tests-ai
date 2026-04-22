@@ -60,6 +60,33 @@ func TestForallExistsViaCELMacros(t *testing.T) {
 	assert.Equal(t, false, v)
 }
 
+// Regression: codex P0 — one ack must not be claimed by multiple source events.
+func TestLatencyEachAckUsedAtMostOnce(t *testing.T) {
+	t0 := time.Unix(0, 0)
+	e := newEval(t, func(s *events.MemStore) {
+		// Two orders sharing a key, one ack — only one latency must be emitted.
+		s.Append(events.Event{Stream: "orders", Key: "k", Ts: t0, Direction: events.Produced})
+		s.Append(events.Event{Stream: "orders", Key: "k", Ts: t0.Add(10 * time.Millisecond), Direction: events.Produced})
+		s.Append(events.Event{Stream: "orders.ack", Key: "k", Ts: t0.Add(50 * time.Millisecond), Direction: events.Consumed})
+	})
+	v, err := e.Evaluate("size(latency('orders', 'orders.ack'))")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), v, "second order must NOT also match the same ack")
+}
+
+// Regression: codex P0 — empty latency list must not silently pass SLAs.
+func TestPercentileDurationEmptyErrors(t *testing.T) {
+	e := newEval(t, nil)
+	_, err := e.Evaluate("percentile(latency('orders', 'orders.ack'), 99)")
+	require.Error(t, err, "percentile over an empty stream must surface an error, not 0s")
+}
+
+func TestPercentileDoubleEmptyErrors(t *testing.T) {
+	e := newEval(t, nil)
+	_, err := e.Evaluate("percentile([], 99)")
+	require.Error(t, err)
+}
+
 func TestBefore(t *testing.T) {
 	e := newEval(t, nil)
 	v, err := e.Evaluate("before(timestamp('2026-01-01T00:00:00Z'), timestamp('2026-01-02T00:00:00Z'))")

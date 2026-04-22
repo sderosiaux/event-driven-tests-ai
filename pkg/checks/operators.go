@@ -54,6 +54,9 @@ func fnStream(store events.Store) cel.EnvOption {
 }
 
 // fnPercentileDouble registers `percentile(list<double>, int) -> double`.
+// Empty lists surface a CEL error rather than silently returning NaN/0; this
+// prevents SLA checks like `percentile(...) < 200ms` from passing when nothing
+// was observed.
 func fnPercentileDouble() cel.EnvOption {
 	return cel.Function("percentile",
 		cel.Overload("percentile_list_double_int",
@@ -63,6 +66,9 @@ func fnPercentileDouble() cel.EnvOption {
 				vals, err := refValToFloats(list)
 				if err != nil {
 					return types.NewErr("percentile: %v", err)
+				}
+				if len(vals) == 0 {
+					return types.NewErr("percentile: empty input — refusing to silently pass")
 				}
 				pct, ok := p.Value().(int64)
 				if !ok {
@@ -75,7 +81,8 @@ func fnPercentileDouble() cel.EnvOption {
 }
 
 // fnPercentileDuration registers `percentile(list<duration>, int) -> duration`.
-// Convenient when used with latency() which yields durations.
+// Convenient when used with latency() which yields durations. Empty lists are
+// rejected so missing acks cannot silently satisfy a latency SLO.
 func fnPercentileDuration() cel.EnvOption {
 	return cel.Function("percentile",
 		cel.Overload("percentile_list_duration_int",
@@ -85,6 +92,9 @@ func fnPercentileDuration() cel.EnvOption {
 				durs, err := refValToDurations(list)
 				if err != nil {
 					return types.NewErr("percentile: %v", err)
+				}
+				if len(durs) == 0 {
+					return types.NewErr("percentile: empty input — refusing to silently pass")
 				}
 				pct, ok := p.Value().(int64)
 				if !ok {
@@ -102,9 +112,10 @@ func fnPercentileDuration() cel.EnvOption {
 }
 
 // fnLatency registers `latency(fromStream, toStream string) -> list<duration>`.
-// For each event in fromStream, finds the earliest event in toStream sharing the
-// same Key with Ts >= the source Ts, and emits the time difference. Unmatched
-// source events are skipped (not zeroed). Order: ascending by source Ts.
+// Pairing rule: source events are processed in ascending Ts; each source event
+// is matched to the earliest destination event sharing its Key with Ts >= source.
+// Each destination event is consumed at most once — preventing one ack from
+// satisfying multiple source events (codex P0 regression).
 func fnLatency(store events.Store) cel.EnvOption {
 	return cel.Function("latency",
 		cel.Overload("latency_string_string",
@@ -121,17 +132,44 @@ func fnLatency(store events.Store) cel.EnvOption {
 				}
 				src := store.Query(fromName)
 				dst := store.Query(toName)
-				out := make([]any, 0, len(src))
-				for _, s := range src {
-					match := earliestMatchingEvent(dst, s.Key, s.Ts)
-					if match == nil {
+
+				// Bucket destination events by key, sorted ascending by Ts.
+				dstByKey := make(map[string][]events.Event, len(dst))
+				for _, e := range dst {
+					dstByKey[e.Key] = append(dstByKey[e.Key], e)
+				}
+				for k := range dstByKey {
+					evs := dstByKey[k]
+					sort.Slice(evs, func(i, j int) bool { return evs[i].Ts.Before(evs[j].Ts) })
+					dstByKey[k] = evs
+				}
+
+				// Process source events in ascending Ts so that earlier source
+				// events get earlier matches (FIFO-fair pairing).
+				srcSorted := make([]events.Event, len(src))
+				copy(srcSorted, src)
+				sort.Slice(srcSorted, func(i, j int) bool { return srcSorted[i].Ts.Before(srcSorted[j].Ts) })
+
+				out := make([]any, 0, len(srcSorted))
+				for _, s := range srcSorted {
+					bucket := dstByKey[s.Key]
+					idx := -1
+					for i, e := range bucket {
+						if !e.Ts.Before(s.Ts) {
+							idx = i
+							break
+						}
+					}
+					if idx == -1 {
 						continue
 					}
-					d := match.Ts.Sub(s.Ts)
+					d := bucket[idx].Ts.Sub(s.Ts)
 					if d < 0 {
 						d = 0
 					}
 					out = append(out, d)
+					// Consume that destination event so it is not re-matched.
+					dstByKey[s.Key] = append(bucket[:idx], bucket[idx+1:]...)
 				}
 				return types.DefaultTypeAdapter.NativeToValue(out)
 			}),
@@ -159,25 +197,6 @@ func fnBefore() cel.EnvOption {
 			}),
 		),
 	)
-}
-
-// earliestMatchingEvent returns the first event in evs with the given key whose
-// Ts is >= notBefore, or nil if none match.
-func earliestMatchingEvent(evs []events.Event, key string, notBefore time.Time) *events.Event {
-	var best *events.Event
-	for i := range evs {
-		e := &evs[i]
-		if e.Key != key {
-			continue
-		}
-		if e.Ts.Before(notBefore) {
-			continue
-		}
-		if best == nil || e.Ts.Before(best.Ts) {
-			best = e
-		}
-	}
-	return best
 }
 
 // fnRate registers `rate(list<bool>) -> double` — fraction of true values in [0, 1].
