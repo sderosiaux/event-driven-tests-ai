@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/checks"
 	"github.com/event-driven-tests-ai/edt/pkg/events"
 	"github.com/event-driven-tests-ai/edt/pkg/httpc"
 	"github.com/event-driven-tests-ai/edt/pkg/kafka"
@@ -23,6 +22,8 @@ type workerFlags struct {
 	token        string
 	labels       []string
 	hbInterval   time.Duration
+	loopInterval time.Duration
+	evalInterval time.Duration
 	version      string
 }
 
@@ -49,7 +50,7 @@ func newWorkerCmd() *cobra.Command {
 				fmt.Fprintf(stderr, "worker: %v\n", err)
 			}
 			loop.HandleAssignment = func(ctx context.Context, name string, yamlBody []byte) error {
-				return runOneShotAssignment(ctx, name, yamlBody, pushClient, stderr)
+				return runWatchAssignment(ctx, name, yamlBody, pushClient, stderr, f.loopInterval, f.evalInterval)
 			}
 
 			return loop.Run(cmd.Context())
@@ -59,13 +60,19 @@ func newWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&f.token, "token", "", "Bearer token for control plane auth")
 	cmd.Flags().StringSliceVar(&f.labels, "labels", nil, "Worker labels (key=value, repeatable)")
 	cmd.Flags().DurationVar(&f.hbInterval, "heartbeat-interval", 10*time.Second, "Heartbeat cadence")
+	cmd.Flags().DurationVar(&f.loopInterval, "loop-interval", time.Second, "Floor between two scenario step iterations in watch mode")
+	cmd.Flags().DurationVar(&f.evalInterval, "report-interval", 30*time.Second, "How often watch mode evaluates checks and pushes a snapshot report")
 	cmd.Flags().StringVar(&f.version, "version", version, "Worker version reported on register")
 	return cmd
 }
 
-// runOneShotAssignment executes the assigned scenario in run mode and pushes
-// the report. M2-T7 will replace this with the watch-mode runner.
-func runOneShotAssignment(ctx context.Context, name string, yamlBody []byte, push *reporter.Client, stderr interface{ Write([]byte) (int, error) }) error {
+// runWatchAssignment runs the scenario in watch mode and pushes a snapshot
+// report on every WatchConfig.EvalInterval tick.
+func runWatchAssignment(
+	ctx context.Context, name string, yamlBody []byte,
+	push *reporter.Client, stderr interface{ Write([]byte) (int, error) },
+	loopInterval, evalInterval time.Duration,
+) error {
 	s, err := scenario.Parse(yamlBody)
 	if err != nil {
 		return fmt.Errorf("parse %q: %w", name, err)
@@ -86,27 +93,25 @@ func runOneShotAssignment(ctx context.Context, name string, yamlBody []byte, pus
 		hp = httpc.NewClient(s.Spec.Connectors.HTTP)
 	}
 
-	rep := &report.Report{Scenario: s.Metadata.Name, RunID: newRunID(), Mode: "watch", StartedAt: time.Now().UTC()}
-
+	runID := newRunID()
 	runner := orchestrator.New(s, kp, hp, store)
-	runner.RunID = rep.RunID
-	if err := runner.Run(ctx, s); err != nil {
-		rep.Error = err.Error()
-	}
+	runner.RunID = runID
 
-	evalr, err := checks.NewEvaluator(store)
-	if err == nil {
-		rep.Checks = checks.EvaluateAll(evalr, s.Spec.Checks)
-	}
-	rep.EventCount = store.Len()
-	rep.Finalize()
+	// Silence unused-package warning on report.Report import path.
+	_ = report.StatusPass
 
-	pushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := push.PushReport(pushCtx, rep); err != nil {
-		fmt.Fprintf(stderr, "worker: push report %s: %v\n", rep.RunID, err)
+	cfg := orchestrator.WatchConfig{
+		LoopInterval: loopInterval,
+		EvalInterval: evalInterval,
+		OnReport: func(rep *report.Report) {
+			pushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := push.PushReport(pushCtx, rep); err != nil {
+				fmt.Fprintf(stderr, "worker: push report %s: %v\n", rep.RunID, err)
+			}
+		},
 	}
-	return nil
+	return runner.Watch(ctx, s, cfg)
 }
 
 func parseKVPairs(in []string) map[string]string {
