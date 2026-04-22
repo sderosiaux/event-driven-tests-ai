@@ -3,12 +3,12 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	mrand "math/rand"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/data"
@@ -176,6 +176,11 @@ func nonEmptyOr(s, fallback string) string {
 
 // ---- consume ----------------------------------------------------------------
 
+// errMatched is a sentinel returned from the consume callback once a record
+// satisfies the step's match rules; it lets us break out of PollFetches without
+// being interpreted as a real error.
+var errMatched = fmt.Errorf("__edt_match_satisfied__")
+
 func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 	if r.Kafka == nil {
 		return fmt.Errorf("consume: no kafka client configured")
@@ -193,6 +198,12 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Compile match rules once; nil matcher = "any record from the topic ends the step".
+	m, err := compileMatcher(c.Match)
+	if err != nil {
+		return fmt.Errorf("match rules: %w", err)
+	}
+
 	var slow *scenario.SlowMode
 	if c.SlowMode != nil && c.SlowMode.PauseEvery > 0 {
 		slow = c.SlowMode
@@ -206,43 +217,66 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 		pauseFor = d
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	var consumeErr error
 	consumed := 0
-	go func() {
-		defer wg.Done()
-		err := r.Kafka.Consume(cctx, func(rec kafka.Record) error {
-			var payload any
-			_ = json.Unmarshal(rec.Value, &payload)
-			r.Store.Append(events.Event{
-				Stream:    rec.Topic,
-				Key:       string(rec.Key),
-				Ts:        time.Unix(0, rec.Timestamp),
-				Payload:   payload,
-				Direction: events.Consumed,
-			})
-			consumed++
-			if slow != nil && consumed%slow.PauseEvery == 0 && pauseFor > 0 {
-				select {
-				case <-time.After(pauseFor):
-				case <-cctx.Done():
-					return cctx.Err()
-				}
-			}
-			return nil
-		})
-		// Cancellation/timeout is expected; surface only "real" errors.
-		if err != nil && !isContextErr(err) {
-			consumeErr = err
-		}
-	}()
-	wg.Wait()
-	return consumeErr
-}
+	matched := false
 
-func isContextErr(err error) bool {
-	return err == context.Canceled || err == context.DeadlineExceeded
+	consumeErr := r.Kafka.Consume(cctx, kafka.ConsumeRequest{Topic: c.Topic, Group: c.Group}, func(rec kafka.Record) error {
+		// Defensive: ignore records from any other topic the underlying
+		// subscriber may have leaked (it should not, but cheap to guard).
+		if rec.Topic != c.Topic {
+			return nil
+		}
+		var payload any
+		_ = json.Unmarshal(rec.Value, &payload)
+		r.Store.Append(events.Event{
+			Stream:    rec.Topic,
+			Key:       string(rec.Key),
+			Ts:        time.Unix(0, rec.Timestamp).UTC(),
+			Payload:   payload,
+			Direction: events.Consumed,
+		})
+		consumed++
+
+		if m != nil {
+			ok, err := m.matches(payload)
+			if err != nil {
+				return fmt.Errorf("match rule eval: %w", err)
+			}
+			if ok {
+				matched = true
+				return errMatched
+			}
+		} else {
+			// No rules → first record is enough to advance the step.
+			matched = true
+			return errMatched
+		}
+
+		if slow != nil && consumed%slow.PauseEvery == 0 && pauseFor > 0 {
+			select {
+			case <-time.After(pauseFor):
+			case <-cctx.Done():
+				return cctx.Err()
+			}
+		}
+		return nil
+	})
+
+	switch {
+	case errors.Is(consumeErr, errMatched):
+		return nil
+	case matched:
+		// Match happened but consume returned ctx error first — that's still a pass.
+		return nil
+	case errors.Is(consumeErr, context.DeadlineExceeded):
+		return fmt.Errorf("consume timed out after %s with %d record(s) seen and no match", timeout, consumed)
+	case errors.Is(consumeErr, context.Canceled):
+		return consumeErr
+	case consumeErr != nil:
+		return consumeErr
+	default:
+		return nil
+	}
 }
 
 // ---- http -------------------------------------------------------------------

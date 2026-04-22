@@ -14,11 +14,20 @@ import (
 )
 
 // KafkaPort is the surface the orchestrator needs from a Kafka client.
+//
+// Consume takes a per-call ConsumeRequest so the orchestrator can drive
+// step-scoped subscriptions (one topic + one group per consume step). This
+// avoids the M1 antipattern where a single shared subscription leaked records
+// across steps.
 type KafkaPort interface {
 	Produce(ctx context.Context, r kafka.Record) (kafka.Record, error)
-	Consume(ctx context.Context, fn func(kafka.Record) error) error
+	Consume(ctx context.Context, req kafka.ConsumeRequest, fn func(kafka.Record) error) error
 	Close()
 }
+
+// ConsumeRequest is re-exported here for callers that prefer to import only
+// the orchestrator package.
+type ConsumeRequest = kafka.ConsumeRequest
 
 // HTTPPort is the surface the orchestrator needs from an HTTP client.
 type HTTPPort interface {

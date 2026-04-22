@@ -9,27 +9,33 @@ import (
 )
 
 func TestNewClientRequiresBootstrap(t *testing.T) {
-	_, err := NewClient(&scenario.KafkaConnector{BootstrapServers: ""}, "", nil)
+	_, err := NewClient(&scenario.KafkaConnector{BootstrapServers: ""})
 	require.ErrorContains(t, err, "bootstrap_servers is required")
 
-	_, err = NewClient(nil, "", nil)
+	_, err = NewClient(nil)
 	require.ErrorContains(t, err, "nil connector")
 }
 
 func TestNewClientBuildsWithoutAuth(t *testing.T) {
 	// The client does NOT connect until Ping/Produce — safe to build without a broker.
-	c, err := NewClient(&scenario.KafkaConnector{BootstrapServers: "localhost:9092"}, "", nil)
+	c, err := NewClient(&scenario.KafkaConnector{BootstrapServers: "localhost:9092"})
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	c.Close()
 }
 
-func TestNewClientWithConsumerGroup(t *testing.T) {
-	c, err := NewClient(
-		&scenario.KafkaConnector{BootstrapServers: "localhost:9092,broker2:9092"},
-		"grp", []string{"t1", "t2"})
+func TestNewClientMultipleBootstrap(t *testing.T) {
+	c, err := NewClient(&scenario.KafkaConnector{BootstrapServers: "localhost:9092,broker2:9092"})
 	require.NoError(t, err)
 	c.Close()
+}
+
+func TestConsumeRequiresTopic(t *testing.T) {
+	c, err := NewClient(&scenario.KafkaConnector{BootstrapServers: "localhost:9092"})
+	require.NoError(t, err)
+	defer c.Close()
+	err = c.Consume(t.Context(), ConsumeRequest{Topic: ""}, func(Record) error { return nil })
+	require.ErrorContains(t, err, "consume requires a topic")
 }
 
 func TestSplitServers(t *testing.T) {

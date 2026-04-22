@@ -22,6 +22,7 @@ type fakeKafka struct {
 	mu          sync.Mutex
 	produced    []kafka.Record
 	consumeRecs []kafka.Record // records the fake will deliver to Consume()
+	lastReq     kafka.ConsumeRequest
 }
 
 func (f *fakeKafka) Produce(_ context.Context, r kafka.Record) (kafka.Record, error) {
@@ -33,13 +34,19 @@ func (f *fakeKafka) Produce(_ context.Context, r kafka.Record) (kafka.Record, er
 	r.Timestamp = time.Now().UnixNano()
 	return r, nil
 }
-func (f *fakeKafka) Consume(ctx context.Context, fn func(kafka.Record) error) error {
+func (f *fakeKafka) Consume(ctx context.Context, req kafka.ConsumeRequest, fn func(kafka.Record) error) error {
 	f.mu.Lock()
 	recs := append([]kafka.Record(nil), f.consumeRecs...)
+	f.lastReq = req
 	f.mu.Unlock()
 	for _, r := range recs {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		// Honor topic filtering: only deliver records that belong to the
+		// requested topic, mirroring real subscriber behaviour.
+		if req.Topic != "" && r.Topic != req.Topic {
+			continue
 		}
 		if err := fn(r); err != nil {
 			return err
@@ -125,7 +132,7 @@ func TestProduceRateThrottles(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, 350*time.Millisecond, "5 records at 10/s must take ~400ms (4 gaps)")
 }
 
-func TestConsumeRecordsEvents(t *testing.T) {
+func TestConsumeFirstRecordSatisfiesWhenNoMatchRules(t *testing.T) {
 	now := time.Now()
 	fk := &fakeKafka{
 		consumeRecs: []kafka.Record{
@@ -143,8 +150,69 @@ func TestConsumeRecordsEvents(t *testing.T) {
 		}}},
 	}
 	require.NoError(t, r.Run(context.Background(), s))
+	// No match rules → first record is enough to advance the step.
 	got := store.Query("orders.ack")
-	assert.Len(t, got, 2)
+	assert.Len(t, got, 1, "consume should stop after the first record when no match rules are defined")
+	assert.Equal(t, "g", fk.lastReq.Group, "consume request should propagate the step's group")
+}
+
+// Regression: codex P0 — consume timeout with no match must surface as an error.
+func TestConsumeTimeoutWithNoMatchIsError(t *testing.T) {
+	store := events.NewMemStore(0)
+	fk := &fakeKafka{} // delivers no records
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name:    "wait",
+		Consume: &scenario.ConsumeStep{Topic: "orders.ack", Timeout: "50ms"},
+	}}}}
+	err := r.Run(context.Background(), s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+}
+
+// Regression: codex P0 — match rules must filter and the rule must be evaluated against payload.
+func TestConsumeMatchRuleSelectsTheRightRecord(t *testing.T) {
+	now := time.Now()
+	fk := &fakeKafka{
+		consumeRecs: []kafka.Record{
+			{Topic: "orders.ack", Key: []byte("1"), Value: []byte(`{"orderId":"1"}`), Timestamp: now.UnixNano()},
+			{Topic: "orders.ack", Key: []byte("2"), Value: []byte(`{"orderId":"2"}`), Timestamp: now.UnixNano()},
+			{Topic: "orders.ack", Key: []byte("3"), Value: []byte(`{"orderId":"3"}`), Timestamp: now.UnixNano()},
+		},
+	}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name: "c",
+		Consume: &scenario.ConsumeStep{
+			Topic:   "orders.ack",
+			Timeout: "200ms",
+			Match:   []scenario.MatchRule{{Key: `payload.orderId == "2"`}},
+		},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	got := store.Query("orders.ack")
+	assert.Len(t, got, 2, "should stop after the matching record (2 events read)")
+}
+
+// Regression: codex P0 — records from other topics must NOT leak into a step.
+func TestConsumeIgnoresRecordsFromOtherTopics(t *testing.T) {
+	now := time.Now()
+	fk := &fakeKafka{
+		consumeRecs: []kafka.Record{
+			{Topic: "intruder", Key: []byte("x"), Value: []byte(`{}`), Timestamp: now.UnixNano()},
+			{Topic: "orders.ack", Key: []byte("1"), Value: []byte(`{}`), Timestamp: now.UnixNano()},
+		},
+	}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name:    "c",
+		Consume: &scenario.ConsumeStep{Topic: "orders.ack", Timeout: "100ms"},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	assert.Empty(t, store.Query("intruder"))
+	assert.Len(t, store.Query("orders.ack"), 1)
 }
 
 func TestHTTPStepRecordsAndChecksExpect(t *testing.T) {
@@ -208,5 +276,8 @@ func TestProduceErrorIsRecordedAsFailedEvent(t *testing.T) {
 type errKafka struct{ err error }
 
 func (e *errKafka) Produce(_ context.Context, r kafka.Record) (kafka.Record, error) { return r, e.err }
-func (e *errKafka) Consume(ctx context.Context, _ func(kafka.Record) error) error    { <-ctx.Done(); return ctx.Err() }
-func (e *errKafka) Close()                                                            {}
+func (e *errKafka) Consume(ctx context.Context, _ kafka.ConsumeRequest, _ func(kafka.Record) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (e *errKafka) Close() {}

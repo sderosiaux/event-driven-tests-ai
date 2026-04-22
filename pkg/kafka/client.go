@@ -10,9 +10,12 @@ import (
 )
 
 // Client is the edt-facing wrapper around a *kgo.Client.
-// One client per scenario run (producer + consumer capability).
+// One client per scenario run holds the long-lived producer; each call to
+// Consume builds a fresh subscriber so per-step subscriptions are isolated.
 type Client struct {
-	cl *kgo.Client
+	cl       *kgo.Client // producer (long-lived)
+	seeds    []string    // captured for building per-step consumers
+	authOpts []kgo.Opt   // captured for building per-step consumers
 }
 
 // Record is the subset of kgo.Record edt callers interact with.
@@ -27,8 +30,9 @@ type Record struct {
 }
 
 // NewClient builds a Client from a scenario.KafkaConnector.
-// consumerGroup and consumeTopics are optional — pass "" / nil for producer-only.
-func NewClient(c *scenario.KafkaConnector, consumerGroup string, consumeTopics []string) (*Client, error) {
+// The returned Client holds a producer kgo.Client; consumers are built on
+// demand by Consume() so each consume step has its own subscription.
+func NewClient(c *scenario.KafkaConnector) (*Client, error) {
 	if c == nil {
 		return nil, fmt.Errorf("kafka: nil connector")
 	}
@@ -37,26 +41,17 @@ func NewClient(c *scenario.KafkaConnector, consumerGroup string, consumeTopics [
 	}
 	seeds := splitServers(c.BootstrapServers)
 
-	opts := []kgo.Opt{kgo.SeedBrokers(seeds...)}
-
 	authOpts, err := buildAuthOpts(c.Auth)
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, authOpts...)
 
-	if consumerGroup != "" {
-		opts = append(opts, kgo.ConsumerGroup(consumerGroup))
-	}
-	if len(consumeTopics) > 0 {
-		opts = append(opts, kgo.ConsumeTopics(consumeTopics...))
-	}
-
-	cl, err := kgo.NewClient(opts...)
+	prodOpts := append([]kgo.Opt{kgo.SeedBrokers(seeds...)}, authOpts...)
+	cl, err := kgo.NewClient(prodOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("kafka: build client: %w", err)
+		return nil, fmt.Errorf("kafka: build producer: %w", err)
 	}
-	return &Client{cl: cl}, nil
+	return &Client{cl: cl, seeds: seeds, authOpts: authOpts}, nil
 }
 
 // Close flushes any in-flight produces and releases connections.
@@ -97,20 +92,48 @@ func (c *Client) Produce(ctx context.Context, r Record) (Record, error) {
 	return out, nil
 }
 
-// Consume calls fn for each record polled. It returns when ctx is cancelled or
-// fn returns a non-nil error (which is propagated to the caller).
-// Errors on individual fetches are logged but do not terminate the loop unless
-// ctx has been cancelled.
-func (c *Client) Consume(ctx context.Context, fn func(Record) error) error {
+// ConsumeRequest narrows what a consume call needs.
+type ConsumeRequest struct {
+	Topic string // required
+	Group string // optional; empty = direct (no group) consumption
+}
+
+// Consume builds a fresh subscriber for the given request and invokes fn for
+// each fetched record until ctx is cancelled or fn returns an error.
+// Fetch-level errors (broker down, auth failure, unknown topic) are surfaced
+// as a wrapped error rather than degraded into "no records until timeout".
+func (c *Client) Consume(ctx context.Context, req ConsumeRequest, fn func(Record) error) error {
+	if req.Topic == "" {
+		return fmt.Errorf("kafka: consume requires a topic")
+	}
+	opts := append([]kgo.Opt{kgo.SeedBrokers(c.seeds...)}, c.authOpts...)
+	opts = append(opts, kgo.ConsumeTopics(req.Topic))
+	if req.Group != "" {
+		opts = append(opts, kgo.ConsumerGroup(req.Group))
+	}
+	sub, err := kgo.NewClient(opts...)
+	if err != nil {
+		return fmt.Errorf("kafka: build subscriber: %w", err)
+	}
+	defer sub.Close()
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fetches := c.cl.PollFetches(ctx)
+		fetches := sub.PollFetches(ctx)
 		if fetches.IsClientClosed() {
-			return fmt.Errorf("kafka: client closed mid-poll")
+			return fmt.Errorf("kafka: subscriber closed mid-poll")
 		}
-		// Record-level errors continue; the caller decides via ctx cancellation.
+		// Surface non-context fetch errors instead of swallowing them.
+		if errs := fetches.Errors(); len(errs) > 0 {
+			for _, fe := range errs {
+				if fe.Err == context.Canceled || fe.Err == context.DeadlineExceeded {
+					continue
+				}
+				return fmt.Errorf("kafka: fetch error topic=%s partition=%d: %w", fe.Topic, fe.Partition, fe.Err)
+			}
+		}
 		iter := fetches.RecordIter()
 		for !iter.Done() {
 			kr := iter.Next()

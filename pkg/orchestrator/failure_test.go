@@ -94,19 +94,23 @@ func TestConsumerSlowMode(t *testing.T) {
 	store := events.NewMemStore(0)
 	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
 
+	// A never-true match rule keeps the consumer reading until timeout, so
+	// slow_mode pauses can accumulate over multiple records.
 	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
 		Name: "c",
 		Consume: &scenario.ConsumeStep{
-			Topic: "orders.ack", Timeout: "500ms",
+			Topic:   "orders.ack",
+			Timeout: "500ms",
+			Match:   []scenario.MatchRule{{Key: `payload.n == 9999`}}, // never matches
 			SlowMode: &scenario.SlowMode{PauseEvery: 3, PauseFor: "80ms"},
 		},
 	}}}}
 
 	t0 := time.Now()
-	require.NoError(t, r.Run(context.Background(), s))
+	err := r.Run(context.Background(), s)
 	elapsed := time.Since(t0)
-
-	// 10 records, pause every 3 → 3 pauses @80ms = 240ms minimum.
+	require.Error(t, err) // never-matching rule + timeout = error
+	assert.Contains(t, err.Error(), "timed out")
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "slow_mode should add observable lag")
 	assert.Len(t, store.Query("orders.ack"), 10)
 }

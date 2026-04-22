@@ -81,10 +81,11 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 		StartedAt: time.Now().UTC(),
 	}
 
-	// Build ports.
+	// Build ports. Each consume step builds its own subscriber on demand,
+	// so the long-lived client only owns the producer.
 	var kp orchestrator.KafkaPort
 	if s.Spec.Connectors.Kafka != nil {
-		kc, err := kafka.NewClient(s.Spec.Connectors.Kafka, "", collectConsumeTopics(s))
+		kc, err := kafka.NewClient(s.Spec.Connectors.Kafka)
 		if err != nil {
 			rep.Error = err.Error()
 			return writeAndExit(stdout, rep, f.format)
@@ -148,18 +149,6 @@ func writeAndExit(w io.Writer, r *report.Report, format string) error {
 	default:
 		return &exitError{code: 1, msg: "check failures"}
 	}
-}
-
-func collectConsumeTopics(s *scenario.Scenario) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, st := range s.Spec.Steps {
-		if st.Consume != nil && !seen[st.Consume.Topic] {
-			seen[st.Consume.Topic] = true
-			out = append(out, st.Consume.Topic)
-		}
-	}
-	return out
 }
 
 func newRunID() string {
