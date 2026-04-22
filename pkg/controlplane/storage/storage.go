@@ -49,6 +49,25 @@ type CheckResult struct {
 	At       time.Time
 }
 
+// Role enumerates token capabilities.
+type Role string
+
+const (
+	RoleAdmin  Role = "admin"
+	RoleEditor Role = "editor"
+	RoleViewer Role = "viewer"
+	RoleWorker Role = "worker"
+)
+
+// Token is a bearer token held by a user or worker.
+type Token struct {
+	ID        string
+	Plaintext string // present only when freshly minted; never re-emitted
+	Role      Role
+	Note      string
+	CreatedAt time.Time
+}
+
 // Worker is a registered worker capable of running scenarios.
 type Worker struct {
 	ID            string
@@ -89,6 +108,13 @@ type Storage interface {
 	ListWorkers(ctx context.Context) ([]Worker, error)
 	AssignScenario(ctx context.Context, workerID, scenarioName string) error
 	ListAssignments(ctx context.Context, workerID string) ([]Assignment, error)
+
+	// Tokens
+	IssueToken(ctx context.Context, role Role, note string) (Token, error)
+	IssueTokenWithPlaintext(ctx context.Context, plaintext string, role Role, note string) (Token, error)
+	LookupToken(ctx context.Context, plaintext string) (Token, error)
+	ListTokens(ctx context.Context) ([]Token, error)
+	RevokeToken(ctx context.Context, id string) error
 
 	Close() error
 }

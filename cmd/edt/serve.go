@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane"
 	"github.com/spf13/cobra"
@@ -16,11 +17,16 @@ func newServeCmd() *cobra.Command {
 			cfg.Logger = func(format string, args ...any) {
 				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 			}
+			if cfg.AdminToken == "" {
+				cfg.AdminToken = os.Getenv("EDT_ADMIN_TOKEN")
+			}
 			s := controlplane.NewServer(cfg)
 			return s.Run(cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Addr, "addr", ":8080", "Listen address")
 	cmd.Flags().StringVar(&cfg.DBURL, "db-url", "", "Postgres connection string (empty = in-memory dev mode)")
+	cmd.Flags().BoolVar(&cfg.RequireAuth, "require-auth", false, "Require a valid bearer token on mutating endpoints")
+	cmd.Flags().StringVar(&cfg.AdminToken, "admin-token", "", "Bootstrap admin token (also via EDT_ADMIN_TOKEN env)")
 	return cmd
 }

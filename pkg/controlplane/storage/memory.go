@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -18,6 +19,8 @@ type MemStore struct {
 	checksByRun map[string][]CheckResult     // run_id → checks
 	workers     map[string]Worker            // id → worker
 	assignments map[string][]Assignment      // worker_id → assignments
+	tokens      map[string]Token             // plaintext → token (NOT id; lookup is by bearer)
+	tokensByID  map[string]string            // id → plaintext (for revoke)
 	now         func() time.Time             // overridable for tests
 }
 
@@ -28,6 +31,8 @@ func NewMemStore() *MemStore {
 		checksByRun: make(map[string][]CheckResult),
 		workers:     make(map[string]Worker),
 		assignments: make(map[string][]Assignment),
+		tokens:      make(map[string]Token),
+		tokensByID:  make(map[string]string),
 		now:         func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -225,6 +230,77 @@ func (s *MemStore) ListAssignments(_ context.Context, workerID string) ([]Assign
 	out := make([]Assignment, len(src))
 	copy(out, src)
 	return out, nil
+}
+
+// ---- tokens ----------------------------------------------------------------
+
+func (s *MemStore) IssueToken(_ context.Context, role Role, note string) (Token, error) {
+	pt := "edt_" + randID() + randID()
+	return s.issueLocked(pt, role, note)
+}
+
+func (s *MemStore) IssueTokenWithPlaintext(_ context.Context, plaintext string, role Role, note string) (Token, error) {
+	if plaintext == "" {
+		return Token{}, fmt.Errorf("storage: empty token plaintext")
+	}
+	return s.issueLocked(plaintext, role, note)
+}
+
+func (s *MemStore) issueLocked(plaintext string, role Role, note string) (Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.tokens[plaintext]; exists {
+		// Idempotent for IssueTokenWithPlaintext bootstrap; return existing.
+		t := s.tokens[plaintext]
+		t.Plaintext = plaintext
+		return t, nil
+	}
+	tok := Token{
+		ID:        "tok_" + randID(),
+		Plaintext: plaintext,
+		Role:      role,
+		Note:      note,
+		CreatedAt: s.now(),
+	}
+	s.tokens[plaintext] = tok
+	s.tokensByID[tok.ID] = plaintext
+	return tok, nil
+}
+
+func (s *MemStore) LookupToken(_ context.Context, plaintext string) (Token, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.tokens[plaintext]
+	if !ok {
+		return Token{}, ErrNotFound
+	}
+	out := t
+	out.Plaintext = "" // never re-emit through Lookup
+	return out, nil
+}
+
+func (s *MemStore) ListTokens(_ context.Context) ([]Token, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Token, 0, len(s.tokens))
+	for _, t := range s.tokens {
+		t.Plaintext = ""
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (s *MemStore) RevokeToken(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pt, ok := s.tokensByID[id]
+	if !ok {
+		return ErrNotFound
+	}
+	delete(s.tokens, pt)
+	delete(s.tokensByID, id)
+	return nil
 }
 
 // ---- helpers ---------------------------------------------------------------

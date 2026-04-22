@@ -17,13 +17,16 @@ import (
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/ui"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	_ "github.com/event-driven-tests-ai/edt/pkg/report" // referenced by api package; ensures consistent dep graph
 )
 
 // Config drives a Server. Zero values are sane for tests.
 type Config struct {
-	Addr   string        // listen address, defaults to ":8080"
-	DBURL  string        // Postgres connection string; empty = run with no storage (dev only)
-	Logger func(format string, args ...any)
+	Addr        string // listen address, defaults to ":8080"
+	DBURL       string // Postgres connection string; empty = run with no storage (dev only)
+	RequireAuth bool   // enforce bearer-token role middleware on mutating endpoints
+	AdminToken  string // bootstrap admin bearer token (also via EDT_ADMIN_TOKEN)
+	Logger      func(format string, args ...any)
 }
 
 // Server is the long-running control-plane process.
@@ -55,6 +58,7 @@ func NewServer(cfg Config) *Server {
 	store := storage.NewMemStore() // M2 default; Postgres backend lands in M2-T2b.
 	mreg := metrics.New()
 	s := &Server{cfg: cfg, router: r, store: store, api: api.NewWithMetrics(store, mreg), metrics: mreg}
+	s.bootstrapAdmin()
 	s.routes()
 	return s
 }
@@ -75,23 +79,65 @@ func NewServerWithStorage(cfg Config, store storage.Storage) *Server {
 	}
 	mreg := metrics.New()
 	s := &Server{cfg: cfg, router: r, store: store, api: api.NewWithMetrics(store, mreg), metrics: mreg}
+	s.bootstrapAdmin()
 	s.routes()
 	return s
+}
+
+// bootstrapAdmin seeds the configured admin token on startup so the server
+// can require auth from the very first request.
+func (s *Server) bootstrapAdmin() {
+	if s.cfg.AdminToken == "" {
+		return
+	}
+	t, err := s.store.IssueTokenWithPlaintext(context.Background(), s.cfg.AdminToken, storage.RoleAdmin, "bootstrap")
+	if err != nil {
+		s.cfg.Logger("bootstrap admin token: %v", err)
+		return
+	}
+	s.cfg.Logger("bootstrap admin token id=%s installed", t.ID)
 }
 
 func (s *Server) routes() {
 	s.router.Get("/healthz", s.handleHealthz)
 	s.router.Method(http.MethodGet, "/metrics", s.metrics.Handler())
-	s.api.MountScenarios(s.router)
-	s.api.MountRuns(s.router)
-	s.api.MountWorkers(s.router)
 
-	// UI: serve embedded static assets and route every other GET to the SPA.
+	// Optional auth: mutating endpoints require editor; tokens management
+	// requires admin. When RequireAuth is false the API is fully open — handy
+	// for local dev and the in-process tests.
+	editor := s.maybeRequire(storage.RoleEditor)
+	admin := s.maybeRequire(storage.RoleAdmin)
+	worker := s.maybeRequire(storage.RoleWorker)
+
+	s.router.Group(func(r chi.Router) {
+		r.Use(editor)
+		s.api.MountScenarios(r)
+	})
+	s.router.Group(func(r chi.Router) {
+		r.Use(worker)
+		s.api.MountRuns(r)
+		s.api.MountWorkers(r)
+	})
+	s.router.Group(func(r chi.Router) {
+		r.Use(admin)
+		s.api.MountTokens(r)
+	})
+
+	// UI is always public (read-only).
 	staticHandler := http.StripPrefix("/ui/static/", http.FileServer(ui.StaticFS()))
 	s.router.Handle("/ui/static/*", staticHandler)
 	s.router.Get("/", s.serveIndex)
 	s.router.Get("/ui/runs", s.serveIndex)
 	s.router.Get("/ui/workers", s.serveIndex)
+}
+
+// maybeRequire returns a no-op middleware when auth is disabled, otherwise
+// returns the role-checking middleware.
+func (s *Server) maybeRequire(min storage.Role) func(http.Handler) http.Handler {
+	if !s.cfg.RequireAuth {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return s.api.RequireRole(min)
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter, _ *http.Request) {
