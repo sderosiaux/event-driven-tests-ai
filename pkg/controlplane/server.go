@@ -83,6 +83,7 @@ func (s *Server) routes() {
 	s.router.Method(http.MethodGet, "/metrics", s.metrics.Handler())
 	s.api.MountScenarios(s.router)
 	s.api.MountRuns(s.router)
+	s.api.MountWorkers(s.router)
 }
 
 // Handler returns the underlying http.Handler for direct use in tests
