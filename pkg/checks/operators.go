@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/events"
@@ -27,7 +28,70 @@ func storeFunctions(store events.Store) []cel.EnvOption {
 		fnRate(),
 		fnLatency(store),
 		fnBefore(),
+		fnHTTP(store),
 	}
+}
+
+// fnHTTP registers `http(pathPattern) -> list<map<string, dyn>>` returning
+// every HTTP event whose stream matches "http:<path>" against pathPattern.
+// pathPattern uses '*' as a wildcard matching any character sequence.
+// Example: `http('/warehouse/*').all(e, e.payload.status == 200)`.
+func fnHTTP(store events.Store) cel.EnvOption {
+	return cel.Function("http",
+		cel.Overload("http_string",
+			[]*cel.Type{cel.StringType},
+			cel.ListType(cel.MapType(cel.StringType, cel.DynType)),
+			cel.UnaryBinding(func(arg ref.Val) ref.Val {
+				pattern, ok := arg.Value().(string)
+				if !ok {
+					return types.NewErr("http: expected string pattern, got %T", arg.Value())
+				}
+				out := make([]any, 0)
+				for _, name := range store.Streams() {
+					path, isHTTP := strings.CutPrefix(name, "http:")
+					if !isHTTP {
+						continue
+					}
+					if !globMatch(pattern, path) {
+						continue
+					}
+					for _, e := range store.Query(name) {
+						out = append(out, eventToMap(e))
+					}
+				}
+				return types.DefaultTypeAdapter.NativeToValue(out)
+			}),
+		),
+	)
+}
+
+// globMatch implements simple shell-style globbing with '*' wildcards.
+// Other characters match literally. Used by the http() operator.
+func globMatch(pattern, s string) bool {
+	if pattern == "*" || pattern == s {
+		return true
+	}
+	parts := strings.Split(pattern, "*")
+	pos := 0
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		idx := strings.Index(s[pos:], p)
+		if idx == -1 {
+			return false
+		}
+		// Anchor first segment to start of string when pattern doesn't begin with '*'.
+		if i == 0 && !strings.HasPrefix(pattern, "*") && idx != 0 {
+			return false
+		}
+		pos += idx + len(p)
+	}
+	// Anchor last segment to end of string when pattern doesn't end with '*'.
+	if !strings.HasSuffix(pattern, "*") && pos != len(s) {
+		return false
+	}
+	return true
 }
 
 // fnStream registers `stream(name) -> list<map<string, dyn>>` returning all

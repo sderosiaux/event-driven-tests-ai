@@ -1,17 +1,27 @@
 package events
 
-import "sync"
+import (
+	"sort"
+	"sync"
+	"time"
+)
 
 // DefaultCapPerStream caps how many events are retained per stream
 // to bound memory in long-running scenarios.
 const DefaultCapPerStream = 100_000
 
 // Store is the interface the orchestrator writes to and the check evaluator reads from.
+//
+// Time-windowed accessors (QueryRange, Since, AllSorted) are intended for the
+// M2 watch mode where checks are evaluated over sliding windows.
 type Store interface {
 	Append(e Event)
 	Query(stream string) []Event
+	QueryRange(stream string, from, to time.Time) []Event
+	Since(stream string, from time.Time) []Event
 	Streams() []string
 	All() []Event
+	AllSorted() []Event
 	Len() int
 }
 
@@ -60,6 +70,40 @@ func (s *MemStore) Query(stream string) []Event {
 	out := make([]Event, len(src))
 	copy(out, src)
 	return out
+}
+
+// QueryRange returns events whose Ts is in [from, to] (inclusive).
+// from.IsZero() means -infinity; to.IsZero() means +infinity.
+func (s *MemStore) QueryRange(stream string, from, to time.Time) []Event {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src := s.byStream[stream]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]Event, 0, len(src))
+	for _, e := range src {
+		if !from.IsZero() && e.Ts.Before(from) {
+			continue
+		}
+		if !to.IsZero() && e.Ts.After(to) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// Since is shorthand for QueryRange(stream, from, time.Time{}).
+func (s *MemStore) Since(stream string, from time.Time) []Event {
+	return s.QueryRange(stream, from, time.Time{})
+}
+
+// AllSorted returns every event across every stream, sorted by Ts ascending.
+func (s *MemStore) AllSorted() []Event {
+	all := s.All()
+	sort.Slice(all, func(i, j int) bool { return all[i].Ts.Before(all[j].Ts) })
+	return all
 }
 
 func (s *MemStore) Streams() []string {
