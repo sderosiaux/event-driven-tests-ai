@@ -3,6 +3,7 @@ module github.com/event-driven-tests-ai/edt
 go 1.26.1
 
 require (
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/cel-go v0.28.0
 	github.com/invopop/jsonschema v0.13.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
