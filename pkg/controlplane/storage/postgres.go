@@ -221,6 +221,51 @@ func (s *PGStore) ListRuns(ctx context.Context, scenario string, limit int) ([]R
 	return out, rows.Err()
 }
 
+func (s *PGStore) AppendCheckSamples(ctx context.Context, samples []CheckSample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, sample := range samples {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO check_samples (scenario_name, check_name, ts, passed, value, severity, "window")
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, sample.Scenario, sample.Check, sample.Ts, sample.Passed, sample.Value, sample.Severity, sample.Window); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PGStore) LoadCheckSamplesSince(ctx context.Context, scenario string, since time.Time) ([]CheckSample, error) {
+	rows, err := s.pool.Query(ctx, `
+        SELECT scenario_name, check_name, ts, passed, value, severity, "window"
+        FROM check_samples
+        WHERE scenario_name = $1 AND ts >= $2
+        ORDER BY ts
+    `, scenario, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CheckSample
+	for rows.Next() {
+		var sample CheckSample
+		var value, window *string
+		if err := rows.Scan(&sample.Scenario, &sample.Check, &sample.Ts, &sample.Passed, &value, &sample.Severity, &window); err != nil {
+			return nil, err
+		}
+		sample.Value = derefStr(value)
+		sample.Window = derefStr(window)
+		out = append(out, sample)
+	}
+	return out, rows.Err()
+}
+
 func (s *PGStore) SLOPassRate(ctx context.Context, scenario string, window time.Duration) (map[string]float64, error) {
 	cutoff := time.Now().Add(-window)
 	rows, err := s.pool.Query(ctx, `
@@ -347,32 +392,38 @@ func (s *PGStore) IssueToken(ctx context.Context, role Role, note string) (Token
 }
 
 func (s *PGStore) IssueTokenWithPlaintext(ctx context.Context, plaintext string, role Role, note string) (Token, error) {
-	t := Token{
-		ID: "tok_" + randID(), Plaintext: plaintext, Role: role, Note: note, CreatedAt: time.Now().UTC(),
-	}
-	if _, err := s.pool.Exec(ctx, `
-        INSERT INTO tokens (id, plaintext, role, note, created_at)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (plaintext) DO NOTHING
-    `, t.ID, t.Plaintext, string(t.Role), t.Note, t.CreatedAt); err != nil {
-		return Token{}, err
-	}
-	// If a row already existed for this plaintext, fetch it back to return the
-	// canonical id.
-	row := s.pool.QueryRow(ctx, `SELECT id, plaintext, role, note, created_at FROM tokens WHERE plaintext = $1`, t.Plaintext)
+	digest := hashToken(plaintext)
+	newID := "tok_" + randID()
+	// Atomic upsert-if-absent: the CTE inserts-or-does-nothing then always
+	// falls back to selecting the canonical row. Removes the race between the
+	// old two-statement INSERT + SELECT.
+	row := s.pool.QueryRow(ctx, `
+        WITH ins AS (
+            INSERT INTO tokens (id, plaintext_sha256, role, note, created_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (plaintext_sha256) DO NOTHING
+            RETURNING id, role, note, created_at
+        )
+        SELECT id, role, note, created_at FROM ins
+        UNION ALL
+        SELECT id, role, note, created_at FROM tokens WHERE plaintext_sha256 = $2
+        LIMIT 1
+    `, newID, digest, string(role), note, time.Now().UTC())
+
 	var stored Token
 	var roleStr string
-	if err := row.Scan(&stored.ID, &stored.Plaintext, &roleStr, &stored.Note, &stored.CreatedAt); err != nil {
+	if err := row.Scan(&stored.ID, &roleStr, &stored.Note, &stored.CreatedAt); err != nil {
 		return Token{}, err
 	}
 	stored.Role = Role(roleStr)
+	stored.Plaintext = plaintext
 	return stored, nil
 }
 
 func (s *PGStore) LookupToken(ctx context.Context, plaintext string) (Token, error) {
 	var t Token
 	var roleStr string
-	err := s.pool.QueryRow(ctx, `SELECT id, role, note, created_at FROM tokens WHERE plaintext = $1`, plaintext).
+	err := s.pool.QueryRow(ctx, `SELECT id, role, note, created_at FROM tokens WHERE plaintext_sha256 = $1`, hashToken(plaintext)).
 		Scan(&t.ID, &roleStr, &t.Note, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Token{}, ErrNotFound

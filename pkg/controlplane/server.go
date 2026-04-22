@@ -17,7 +17,6 @@ import (
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/ui"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	_ "github.com/event-driven-tests-ai/edt/pkg/report" // referenced by api package; ensures consistent dep graph
 )
 
 // Config drives a Server. Zero values are sane for tests.

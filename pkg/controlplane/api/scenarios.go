@@ -32,6 +32,51 @@ func toScenarioResponse(s storage.Scenario) scenarioResponse {
 func (a *API) MountScenarioReads(r chi.Router) {
 	r.Get("/api/v1/scenarios", a.listScenarios)
 	r.Get("/api/v1/scenarios/{name}", a.getScenario)
+	r.Get("/api/v1/scenarios/{name}/state", a.scenarioState)
+}
+
+// scenarioState returns recent check samples for a scenario so a resumed worker
+// can seed its windowed state. Window defaults to 1h and can be overridden via
+// ?since=<RFC3339> or ?window=<duration>.
+func (a *API) scenarioState(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	since := computeSince(r)
+	samples, err := a.Store.LoadCheckSamplesSince(r.Context(), name, since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]map[string]any, len(samples))
+	for i, s := range samples {
+		out[i] = map[string]any{
+			"check":    s.Check,
+			"ts":       s.Ts,
+			"passed":   s.Passed,
+			"value":    s.Value,
+			"severity": s.Severity,
+			"window":   s.Window,
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"scenario": name,
+		"since":    since,
+		"samples":  out,
+	})
+}
+
+func computeSince(r *http.Request) time.Time {
+	if v := r.URL.Query().Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+	}
+	window := time.Hour
+	if v := r.URL.Query().Get("window"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			window = d
+		}
+	}
+	return time.Now().Add(-window)
 }
 
 // MountScenarioWrites attaches mutating scenario routes onto a chi router.

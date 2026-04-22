@@ -21,18 +21,21 @@ type Loop struct {
 	Labels            map[string]string
 	Version           string
 	HeartbeatInterval time.Duration
+	MaxConcurrentRuns int // bounds simultaneous assignments; defaults to 16
 	HandleAssignment  func(ctx context.Context, scenario string, yaml []byte) error
 	OnError           func(err error) // optional logger
 
-	id        string
-	mu        sync.Mutex
+	id         string
+	mu         sync.Mutex
 	dispatched map[string]context.CancelFunc // scenario → cancel for its goroutine
+	slots      chan struct{}                 // semaphore limiting concurrent runs
 }
 
 func NewLoop(c *Client) *Loop {
 	return &Loop{
 		Client:            c,
 		HeartbeatInterval: 10 * time.Second,
+		MaxConcurrentRuns: 16,
 		OnError:           func(error) {},
 		dispatched:        make(map[string]context.CancelFunc),
 	}
@@ -46,6 +49,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: register: %w", err)
 	}
 	l.id = resp.WorkerID
+
+	if l.MaxConcurrentRuns <= 0 {
+		l.MaxConcurrentRuns = 16
+	}
+	l.slots = make(chan struct{}, l.MaxConcurrentRuns)
 
 	tick := time.NewTicker(l.HeartbeatInterval)
 	defer tick.Stop()
@@ -109,6 +117,16 @@ func (l *Loop) dispatch(parent context.Context, scenario string) {
 	l.mu.Unlock()
 
 	go func() {
+		// Bound concurrent runs: block until a slot is free or ctx cancels.
+		select {
+		case l.slots <- struct{}{}:
+			defer func() { <-l.slots }()
+		case <-ctx.Done():
+			l.mu.Lock()
+			delete(l.dispatched, scenario)
+			l.mu.Unlock()
+			return
+		}
 		defer func() {
 			l.mu.Lock()
 			delete(l.dispatched, scenario)

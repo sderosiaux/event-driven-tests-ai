@@ -22,6 +22,19 @@ type Scenario struct {
 	UpdatedAt time.Time
 }
 
+// CheckSample is a single check observation persisted for worker-resume replay.
+// It is the minimum shape needed to rehydrate a watch-mode worker's windowed
+// check state after a restart.
+type CheckSample struct {
+	Scenario string
+	Check    string
+	Ts       time.Time
+	Passed   bool
+	Value    string // JSON-encoded raw value, same shape as CheckResult.Value
+	Severity string
+	Window   string
+}
+
 // Run mirrors pkg/report.Report fields the control plane needs to query on.
 // The full report JSON is kept verbatim so future fields are preserved without
 // schema migrations.
@@ -101,6 +114,10 @@ type Storage interface {
 
 	// SLO
 	SLOPassRate(ctx context.Context, scenario string, window time.Duration) (map[string]float64, error)
+
+	// Samples (watch-mode resume)
+	AppendCheckSamples(ctx context.Context, samples []CheckSample) error
+	LoadCheckSamplesSince(ctx context.Context, scenario string, since time.Time) ([]CheckSample, error)
 
 	// Workers
 	RegisterWorker(ctx context.Context, labels map[string]string, version string) (Worker, error)

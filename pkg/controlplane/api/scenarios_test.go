@@ -2,17 +2,22 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane"
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func contextBG() context.Context { return context.Background() }
+func timeNowUTC() time.Time      { return time.Now().UTC() }
 
 const minimalYAML = `apiVersion: edt.io/v1
 kind: Scenario
@@ -149,4 +154,27 @@ func readBody(t *testing.T, resp *http.Response) string {
 	var b bytes.Buffer
 	_, _ = b.ReadFrom(resp.Body)
 	return b.String()
+}
+
+func TestScenarioStateEndpointReturnsSamples(t *testing.T) {
+	srv, store := newTestServer(t)
+
+	// Seed a scenario + a watch-mode run whose checks become samples.
+	ctx := contextBG()
+	_, _ = store.UpsertScenario(ctx, "demo", []byte(minimalYAML), nil)
+	_ = store.AppendCheckSamples(ctx, []storage.CheckSample{
+		{Scenario: "demo", Check: "x", Ts: timeNowUTC().Add(-5 * time.Minute), Passed: true, Severity: "critical"},
+		{Scenario: "demo", Check: "x", Ts: timeNowUTC(), Passed: false, Severity: "critical"},
+		{Scenario: "other", Check: "x", Ts: timeNowUTC(), Passed: true, Severity: "warning"},
+	})
+
+	resp, err := http.Get(srv.URL + "/api/v1/scenarios/demo/state?window=10m")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	samples := got["samples"].([]any)
+	assert.Len(t, samples, 2, "only the two demo samples within 10m must be returned")
 }

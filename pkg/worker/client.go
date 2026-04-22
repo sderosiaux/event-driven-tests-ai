@@ -77,6 +77,33 @@ func (c *Client) FetchScenario(ctx context.Context, name string) ([]byte, error)
 	return []byte(yaml), nil
 }
 
+// ScenarioSample mirrors the wire shape returned by GET /scenarios/{name}/state.
+type ScenarioSample struct {
+	Check    string    `json:"check"`
+	Ts       time.Time `json:"ts"`
+	Passed   bool      `json:"passed"`
+	Value    string    `json:"value"`
+	Severity string    `json:"severity"`
+	Window   string    `json:"window"`
+}
+
+type scenarioStateResponse struct {
+	Scenario string           `json:"scenario"`
+	Since    time.Time        `json:"since"`
+	Samples  []ScenarioSample `json:"samples"`
+}
+
+// FetchScenarioState fetches recent check samples for a scenario so a resumed
+// worker can warm its windowed state. window controls how far back to pull.
+func (c *Client) FetchScenarioState(ctx context.Context, name string, window time.Duration) ([]ScenarioSample, error) {
+	path := fmt.Sprintf("/api/v1/scenarios/%s/state?window=%s", name, window.String())
+	var resp scenarioStateResponse
+	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Samples, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body []byte, out any) error {
 	var rdr io.Reader
 	if body != nil {

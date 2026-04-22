@@ -19,8 +19,9 @@ type MemStore struct {
 	checksByRun map[string][]CheckResult     // run_id → checks
 	workers     map[string]Worker            // id → worker
 	assignments map[string][]Assignment      // worker_id → assignments
-	tokens      map[string]Token             // plaintext → token (NOT id; lookup is by bearer)
-	tokensByID  map[string]string            // id → plaintext (for revoke)
+	tokens      map[string]Token             // sha256(plaintext) → token
+	tokensByID  map[string]string            // id → sha256(plaintext) (for revoke)
+	samples     []CheckSample                // append-only; scanned linearly by scenario+since
 	now         func() time.Time             // overridable for tests
 }
 
@@ -233,6 +234,11 @@ func (s *MemStore) ListAssignments(_ context.Context, workerID string) ([]Assign
 }
 
 // ---- tokens ----------------------------------------------------------------
+//
+// Tokens are indexed by the sha256 hex digest of their plaintext. The
+// in-memory MemStore keeps the plaintext alongside each entry only so
+// IssueTokenWithPlaintext can stay idempotent for bootstrap flows; that
+// field is never returned by LookupToken/ListTokens.
 
 func (s *MemStore) IssueToken(_ context.Context, role Role, note string) (Token, error) {
 	pt := "edt_" + randID() + randID()
@@ -249,11 +255,10 @@ func (s *MemStore) IssueTokenWithPlaintext(_ context.Context, plaintext string, 
 func (s *MemStore) issueLocked(plaintext string, role Role, note string) (Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.tokens[plaintext]; exists {
-		// Idempotent for IssueTokenWithPlaintext bootstrap; return existing.
-		t := s.tokens[plaintext]
-		t.Plaintext = plaintext
-		return t, nil
+	digest := hashToken(plaintext)
+	if existing, exists := s.tokens[digest]; exists {
+		existing.Plaintext = plaintext // echoed once, only to the caller
+		return existing, nil
 	}
 	tok := Token{
 		ID:        "tok_" + randID(),
@@ -262,15 +267,15 @@ func (s *MemStore) issueLocked(plaintext string, role Role, note string) (Token,
 		Note:      note,
 		CreatedAt: s.now(),
 	}
-	s.tokens[plaintext] = tok
-	s.tokensByID[tok.ID] = plaintext
+	s.tokens[digest] = tok
+	s.tokensByID[tok.ID] = digest
 	return tok, nil
 }
 
 func (s *MemStore) LookupToken(_ context.Context, plaintext string) (Token, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	t, ok := s.tokens[plaintext]
+	t, ok := s.tokens[hashToken(plaintext)]
 	if !ok {
 		return Token{}, ErrNotFound
 	}
@@ -294,13 +299,42 @@ func (s *MemStore) ListTokens(_ context.Context) ([]Token, error) {
 func (s *MemStore) RevokeToken(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pt, ok := s.tokensByID[id]
+	digest, ok := s.tokensByID[id]
 	if !ok {
 		return ErrNotFound
 	}
-	delete(s.tokens, pt)
+	delete(s.tokens, digest)
 	delete(s.tokensByID, id)
 	return nil
+}
+
+// ---- check samples (watch-mode resume) ------------------------------------
+
+func (s *MemStore) AppendCheckSamples(_ context.Context, samples []CheckSample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.samples = append(s.samples, samples...)
+	return nil
+}
+
+func (s *MemStore) LoadCheckSamplesSince(_ context.Context, scenario string, since time.Time) ([]CheckSample, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]CheckSample, 0)
+	for _, sample := range s.samples {
+		if sample.Scenario != scenario {
+			continue
+		}
+		if !since.IsZero() && sample.Ts.Before(since) {
+			continue
+		}
+		out = append(out, sample)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ts.Before(out[j].Ts) })
+	return out, nil
 }
 
 // ---- helpers ---------------------------------------------------------------

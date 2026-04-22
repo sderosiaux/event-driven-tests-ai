@@ -49,8 +49,9 @@ func newWorkerCmd() *cobra.Command {
 			loop.OnError = func(err error) {
 				fmt.Fprintf(stderr, "worker: %v\n", err)
 			}
+			wcli := worker.NewClient(f.controlPlane, f.token)
 			loop.HandleAssignment = func(ctx context.Context, name string, yamlBody []byte) error {
-				return runWatchAssignment(ctx, name, yamlBody, pushClient, stderr, f.loopInterval, f.evalInterval)
+				return runWatchAssignment(ctx, name, yamlBody, wcli, pushClient, stderr, f.loopInterval, f.evalInterval)
 			}
 
 			return loop.Run(cmd.Context())
@@ -67,9 +68,12 @@ func newWorkerCmd() *cobra.Command {
 }
 
 // runWatchAssignment runs the scenario in watch mode and pushes a snapshot
-// report on every WatchConfig.EvalInterval tick.
+// report on every WatchConfig.EvalInterval tick. Before starting Watch, it
+// asks the control plane for recent check samples and seeds the orchestrator
+// so the first window is not cold after a worker restart.
 func runWatchAssignment(
 	ctx context.Context, name string, yamlBody []byte,
+	wcli *worker.Client,
 	push *reporter.Client, stderr interface{ Write([]byte) (int, error) },
 	loopInterval, evalInterval time.Duration,
 ) error {
@@ -79,6 +83,24 @@ func runWatchAssignment(
 	}
 
 	store := events.NewMemStore(0)
+	// Best-effort resume: fetch a window of prior samples. Failure here is
+	// logged and ignored — a cold start is still correct, just a warmer one
+	// is nicer.
+	seedCtx, seedCancel := context.WithTimeout(ctx, 5*time.Second)
+	if samples, serr := wcli.FetchScenarioState(seedCtx, name, 2*evalInterval+loopInterval); serr == nil {
+		for _, sample := range samples {
+			store.Append(events.Event{
+				Stream:    "check:" + sample.Check,
+				Key:       sample.Check,
+				Ts:        sample.Ts,
+				Payload:   map[string]any{"passed": sample.Passed, "value": sample.Value},
+				Direction: events.HTTPCall, // reuse HTTPCall as the generic observed-event direction
+			})
+		}
+	} else {
+		fmt.Fprintf(stderr, "worker: resume seed for %s failed: %v\n", name, serr)
+	}
+	seedCancel()
 	var kp orchestrator.KafkaPort
 	if s.Spec.Connectors.Kafka != nil {
 		kc, err := kafka.NewClient(s.Spec.Connectors.Kafka)

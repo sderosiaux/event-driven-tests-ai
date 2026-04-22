@@ -69,6 +69,24 @@ func (a *API) ingestRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Persist samples so a worker restart can re-seed its windowed state.
+	// Only watch-mode snapshots contribute; run-mode runs are ephemeral and
+	// have no sliding-window meaning worth preserving.
+	if rep.Mode == "watch" && len(rep.Checks) > 0 {
+		samples := make([]storage.CheckSample, 0, len(rep.Checks))
+		for _, c := range rep.Checks {
+			samples = append(samples, storage.CheckSample{
+				Scenario: rep.Scenario,
+				Check:    c.Name,
+				Ts:       c.At,
+				Passed:   c.Passed,
+				Value:    encodeCheckValue(c),
+				Severity: string(c.Severity),
+				Window:   c.Window,
+			})
+		}
+		_ = a.Store.AppendCheckSamples(r.Context(), samples)
+	}
 	if a.Metrics != nil {
 		a.Metrics.ObserveRun(&rep)
 	}
