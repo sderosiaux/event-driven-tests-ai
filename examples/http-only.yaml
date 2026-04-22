@@ -1,0 +1,19 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: http-only-demo
+spec:
+  connectors:
+    http:
+      base_url: http://httpbin.org
+  steps:
+    - name: ping
+      http:
+        method: GET
+        path: /status/200
+        expect:
+          status: 200
+  checks:
+    - name: ping_ok
+      expr: "true"
+      severity: critical

@@ -1,0 +1,184 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/event-driven-tests-ai/edt/pkg/checks"
+	"github.com/event-driven-tests-ai/edt/pkg/events"
+	"github.com/event-driven-tests-ai/edt/pkg/httpc"
+	"github.com/event-driven-tests-ai/edt/pkg/kafka"
+	"github.com/event-driven-tests-ai/edt/pkg/orchestrator"
+	"github.com/event-driven-tests-ai/edt/pkg/report"
+	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/spf13/cobra"
+)
+
+type runFlags struct {
+	file             string
+	format           string // json | console
+	bootstrapServers string
+	timeout          time.Duration
+	reportTo         string // reserved for M2
+}
+
+func newRunCmd() *cobra.Command {
+	f := &runFlags{}
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run a scenario once (CI mode)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return doRun(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), f)
+		},
+	}
+	cmd.Flags().StringVar(&f.file, "file", "", "Path to scenario YAML (required)")
+	cmd.Flags().StringVar(&f.format, "format", "console", "Report format: console | json")
+	cmd.Flags().StringVar(&f.bootstrapServers, "bootstrap-servers", "", "Override Kafka bootstrap servers")
+	cmd.Flags().DurationVar(&f.timeout, "timeout", 10*time.Minute, "Overall run timeout")
+	cmd.Flags().StringVar(&f.reportTo, "report-to", "", "Control plane URL (reserved for M2)")
+	_ = cmd.MarkFlagRequired("file")
+	return cmd
+}
+
+func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
+	b, err := os.ReadFile(f.file)
+	if err != nil {
+		return err
+	}
+	s, err := scenario.Parse(b)
+	if err != nil {
+		return err
+	}
+	if err := scenario.ValidateYAML(b); err != nil {
+		return err
+	}
+
+	// Apply CLI overrides.
+	if f.bootstrapServers != "" && s.Spec.Connectors.Kafka != nil {
+		s.Spec.Connectors.Kafka.BootstrapServers = f.bootstrapServers
+	}
+
+	// Signal handling for graceful shutdown (Ctrl-C flushes the report).
+	if f.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, f.timeout)
+		defer cancel()
+	}
+	ctx = withSignalCancel(ctx)
+
+	runID := newRunID()
+	rep := &report.Report{
+		Scenario:  s.Metadata.Name,
+		RunID:     runID,
+		Mode:      "run",
+		StartedAt: time.Now().UTC(),
+	}
+
+	// Build ports.
+	var kp orchestrator.KafkaPort
+	if s.Spec.Connectors.Kafka != nil {
+		kc, err := kafka.NewClient(s.Spec.Connectors.Kafka, "", collectConsumeTopics(s))
+		if err != nil {
+			rep.Error = err.Error()
+			return writeAndExit(stdout, rep, f.format)
+		}
+		defer kc.Close()
+		kp = kc
+	}
+	var hp orchestrator.HTTPPort
+	if s.Spec.Connectors.HTTP != nil {
+		hp = httpc.NewClient(s.Spec.Connectors.HTTP)
+	}
+
+	// Orchestrate.
+	store := events.NewMemStore(0)
+	runner := orchestrator.New(s, kp, hp, store)
+	if err := runner.Run(ctx, s); err != nil {
+		rep.Error = err.Error()
+	}
+
+	// Evaluate checks on whatever was collected.
+	evalr, err := checks.NewEvaluator(store)
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: could not build evaluator: %v\n", err)
+	} else {
+		rep.Checks = checks.EvaluateAll(evalr, s.Spec.Checks)
+	}
+	rep.EventCount = store.Len()
+	rep.Finalize()
+
+	return writeAndExit(stdout, rep, f.format)
+}
+
+// exitError carries a process exit code through cobra.
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e *exitError) Error() string { return e.msg }
+func (e *exitError) ExitCode() int { return e.code }
+
+// writeAndExit prints the report and returns an error carrying the exit code.
+// main.go checks for *exitError and calls os.Exit accordingly, so a scenario
+// error yields exit 2 while a critical check failure yields exit 1.
+func writeAndExit(w io.Writer, r *report.Report, format string) error {
+	switch format {
+	case "json":
+		if err := report.WriteJSON(w, r); err != nil {
+			return err
+		}
+	default:
+		if err := report.WriteConsole(w, r); err != nil {
+			return err
+		}
+	}
+	switch r.ExitCode {
+	case 0:
+		return nil
+	case 2:
+		return &exitError{code: 2, msg: fmt.Sprintf("scenario error: %s", r.Error)}
+	default:
+		return &exitError{code: 1, msg: "check failures"}
+	}
+}
+
+func collectConsumeTopics(s *scenario.Scenario) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, st := range s.Spec.Steps {
+		if st.Consume != nil && !seen[st.Consume.Topic] {
+			seen[st.Consume.Topic] = true
+			out = append(out, st.Consume.Topic)
+		}
+	}
+	return out
+}
+
+func newRunID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "r-" + hex.EncodeToString(b[:])
+}
+
+func withSignalCancel(ctx context.Context) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-ch:
+			cancel()
+		case <-ctx.Done():
+		}
+		signal.Stop(ch)
+	}()
+	return ctx
+}

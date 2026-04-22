@@ -1,0 +1,97 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// writeScenario writes a temporary scenario file pointed at the given server URL.
+func writeScenario(t *testing.T, baseURL, checksYAML string) string {
+	t.Helper()
+	body := "apiVersion: edt.io/v1\n" +
+		"kind: Scenario\n" +
+		"metadata:\n  name: cli-http-test\n" +
+		"spec:\n" +
+		"  connectors:\n" +
+		"    http:\n" +
+		"      base_url: " + baseURL + "\n" +
+		"  steps:\n" +
+		"    - name: ping\n" +
+		"      http:\n" +
+		"        method: GET\n" +
+		"        path: /ok\n" +
+		"        expect:\n          status: 200\n" +
+		"  checks:\n" + checksYAML
+	path := filepath.Join(t.TempDir(), "scenario.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+func TestEdtRunPassesWhenHTTPOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	path := writeScenario(t, srv.URL, "    - name: trivially_true\n      expr: \"true\"\n      severity: critical\n")
+
+	var stdout, stderr bytes.Buffer
+	err := doRun(context.Background(), &stdout, &stderr, &runFlags{
+		file:   path,
+		format: "json",
+	})
+	require.NoError(t, err, "stdout=%s stderr=%s", stdout.String(), stderr.String())
+	assert.Contains(t, stdout.String(), `"status": "pass"`)
+	assert.Contains(t, stdout.String(), `"exit_code": 0`)
+}
+
+func TestEdtRunFailsWhenCheckFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	path := writeScenario(t, srv.URL, "    - name: impossible\n      expr: \"false\"\n      severity: critical\n")
+
+	var stdout, stderr bytes.Buffer
+	err := doRun(context.Background(), &stdout, &stderr, &runFlags{file: path, format: "json"})
+	require.Error(t, err)
+	var ex *exitError
+	require.True(t, errors.As(err, &ex))
+	assert.Equal(t, 1, ex.ExitCode())
+	assert.Contains(t, stdout.String(), `"status": "fail"`)
+}
+
+func TestEdtRunErrorsOnScenarioFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(500) // will make the HTTP expect fail
+	}))
+	defer srv.Close()
+
+	path := writeScenario(t, srv.URL, "    - name: noop\n      expr: \"true\"\n      severity: info\n")
+
+	var stdout, stderr bytes.Buffer
+	err := doRun(context.Background(), &stdout, &stderr, &runFlags{file: path, format: "console"})
+	require.Error(t, err, "stdout=%s stderr=%s", stdout.String(), stderr.String())
+	var ex *exitError
+	require.True(t, errors.As(err, &ex))
+	assert.Equal(t, 2, ex.ExitCode())
+	assert.Contains(t, stdout.String(), "status:   error")
+}
+
+func TestEdtRunMissingFile(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := doRun(context.Background(), &stdout, &stderr, &runFlags{file: "/nonexistent.yaml"})
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "no such file") || strings.Contains(err.Error(), "not exist"))
+}
