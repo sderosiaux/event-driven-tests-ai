@@ -72,6 +72,34 @@ func TestMetricsEndpointReflectsIngestedRuns(t *testing.T) {
 	assert.Contains(t, string(out), `scenario="demo"`)
 }
 
+func TestUIIndexServesEmbeddedHTML(t *testing.T) {
+	s := controlplane.NewServer(controlplane.Config{})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	for _, path := range []string{"/", "/ui/runs", "/ui/workers"} {
+		resp, err := http.Get(srv.URL + path)
+		require.NoError(t, err, path)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		assert.Equal(t, 200, resp.StatusCode, path)
+		assert.Contains(t, string(body), `<title>edt — control plane</title>`, path)
+	}
+}
+
+func TestUIStaticAssetsServed(t *testing.T) {
+	s := controlplane.NewServer(controlplane.Config{})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/ui/static/app.js")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, 200, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "fetchJSON")
+}
+
 func TestUnknownRouteReturns404(t *testing.T) {
 	s := controlplane.NewServer(controlplane.Config{})
 	srv := httptest.NewServer(s.Handler())

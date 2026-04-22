@@ -14,6 +14,7 @@ import (
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/api"
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/metrics"
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
+	"github.com/event-driven-tests-ai/edt/pkg/controlplane/ui"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -84,6 +85,23 @@ func (s *Server) routes() {
 	s.api.MountScenarios(s.router)
 	s.api.MountRuns(s.router)
 	s.api.MountWorkers(s.router)
+
+	// UI: serve embedded static assets and route every other GET to the SPA.
+	staticHandler := http.StripPrefix("/ui/static/", http.FileServer(ui.StaticFS()))
+	s.router.Handle("/ui/static/*", staticHandler)
+	s.router.Get("/", s.serveIndex)
+	s.router.Get("/ui/runs", s.serveIndex)
+	s.router.Get("/ui/workers", s.serveIndex)
+}
+
+func (s *Server) serveIndex(w http.ResponseWriter, _ *http.Request) {
+	body, err := ui.Index()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(body)
 }
 
 // Handler returns the underlying http.Handler for direct use in tests

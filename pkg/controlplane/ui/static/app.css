@@ -1,0 +1,36 @@
+/* Light theme — no hardcoded brand colors, neutral surfaces. */
+:root {
+  --bg:          #fafafa;
+  --surface:     #ffffff;
+  --border:      #e5e5e5;
+  --text:        #1a1a1a;
+  --muted:       #6b7280;
+  --accent:      #2563eb;
+  --accent-soft: #eff6ff;
+  --pass:        #15803d;
+  --fail:        #b91c1c;
+  --warn:        #b45309;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; }
+header { display: flex; align-items: baseline; gap: 32px; padding: 18px 32px; background: var(--surface); border-bottom: 1px solid var(--border); }
+header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+header nav { display: flex; gap: 18px; }
+header nav a { color: var(--text); text-decoration: none; padding: 4px 8px; border-radius: 4px; }
+header nav a:hover { background: var(--accent-soft); color: var(--accent); }
+main { max-width: 1200px; margin: 24px auto; padding: 0 32px; }
+footer { margin-top: 64px; padding: 16px 32px; color: var(--muted); border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
+table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+tbody tr:last-child td { border-bottom: none; }
+th { background: #f4f4f5; font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+td.status-pass  { color: var(--pass); font-weight: 600; }
+td.status-fail  { color: var(--fail); font-weight: 600; }
+td.status-error { color: var(--warn); font-weight: 600; }
+.muted { color: var(--muted); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.empty { padding: 32px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--border); border-radius: 6px; }
+.empty h2 { font-size: 14px; margin: 0 0 6px; color: var(--text); }
+.empty code { background: var(--accent-soft); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
