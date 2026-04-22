@@ -77,6 +77,7 @@ func NewServerWithStorage(cfg Config, store storage.Storage) *Server {
 func (s *Server) routes() {
 	s.router.Get("/healthz", s.handleHealthz)
 	s.api.MountScenarios(s.router)
+	s.api.MountRuns(s.router)
 }
 
 // Handler returns the underlying http.Handler for direct use in tests
