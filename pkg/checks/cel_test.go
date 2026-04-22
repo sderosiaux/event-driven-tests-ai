@@ -58,8 +58,27 @@ func TestPercentileDoublesP99(t *testing.T) {
 	e := newEval(t, nil)
 	v, err := e.Evaluate("percentile([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0], 99)")
 	require.NoError(t, err)
-	// p99 of 10 evenly spaced = ~9.91 with linear interpolation
-	assert.InDelta(t, 9.91, v.(float64), 0.01)
+	// rank = 0.99 * 9 = 8.91 → low=8 (=9.0), high=9 (=10.0), frac=0.91
+	// result = 9.0 + 0.91 * (10.0 - 9.0) = 9.91
+	assert.InDelta(t, 9.91, v.(float64), 1e-9)
+}
+
+// Pin the Type 7 algorithm precisely so a future change is caught.
+func TestPercentileType7Precise(t *testing.T) {
+	e := newEval(t, nil)
+	cases := []struct {
+		expr string
+		want float64
+	}{
+		{"percentile([10.0, 20.0], 99)", 19.9},
+		{"percentile([10.0, 20.0, 30.0], 50)", 20.0},
+		{"percentile([1.0, 2.0, 3.0, 4.0], 75)", 3.25},
+	}
+	for _, tc := range cases {
+		v, err := e.Evaluate(tc.expr)
+		require.NoError(t, err, tc.expr)
+		assert.InDelta(t, tc.want, v.(float64), 1e-9, tc.expr)
+	}
 }
 
 func TestRateBoolList(t *testing.T) {

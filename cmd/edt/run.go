@@ -71,7 +71,9 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 		ctx, cancel = context.WithTimeout(ctx, f.timeout)
 		defer cancel()
 	}
-	ctx = withSignalCancel(ctx)
+	var stopSignals func()
+	ctx, stopSignals = withSignalCancel(ctx)
+	defer stopSignals()
 
 	runID := newRunID()
 	rep := &report.Report{
@@ -157,17 +159,26 @@ func newRunID() string {
 	return "r-" + hex.EncodeToString(b[:])
 }
 
-func withSignalCancel(ctx context.Context) context.Context {
+// withSignalCancel wraps ctx with cancellation on SIGINT/SIGTERM and returns a
+// cleanup function the caller must defer. The cleanup unregisters the signal
+// handler and ensures the watcher goroutine exits, even when doRun is called
+// in library style with a long-lived parent context.
+func withSignalCancel(ctx context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		select {
 		case <-ch:
 			cancel()
 		case <-ctx.Done():
 		}
-		signal.Stop(ch)
 	}()
-	return ctx
+	return ctx, func() {
+		signal.Stop(ch)
+		cancel()
+		<-done
+	}
 }

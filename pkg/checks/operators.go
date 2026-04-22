@@ -307,8 +307,18 @@ func eventToMap(e events.Event) map[string]any {
 	}
 }
 
-// percentile computes the p-th percentile of values using linear interpolation.
-// p is in [0, 100]. Empty input returns NaN.
+// percentile computes the p-th percentile using **linear interpolation between
+// closest ranks** (Type 7 / Excel.PERCENTILE / NumPy default). p is clamped
+// to [0, 100]. Empty input returns NaN — callers that should treat empty
+// inputs as failures filter at the operator boundary, not here.
+//
+// Worked example for [10, 20, 30, 40, 50] with p=50:
+//
+//	rank = 0.5 * (5-1) = 2.0  → exact element index 2 → 30.
+//
+// Worked example for two values [a, b] with p=99:
+//
+//	rank = 0.99 * 1 = 0.99 → low=0, high=1, frac=0.99 → a + 0.99*(b-a).
 func percentile(values []float64, p int) float64 {
 	if len(values) == 0 {
 		return math.NaN()
@@ -326,7 +336,6 @@ func percentile(values []float64, p int) float64 {
 	if len(sorted) == 1 {
 		return sorted[0]
 	}
-	// Linear interpolation between adjacent ranks.
 	rank := float64(p) / 100.0 * float64(len(sorted)-1)
 	low := int(math.Floor(rank))
 	high := int(math.Ceil(rank))

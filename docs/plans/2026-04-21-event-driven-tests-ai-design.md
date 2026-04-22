@@ -143,8 +143,8 @@ spec:
         topic: orders
         payload: ${data.orders}
         rate: 50/s
-        fail_rate: 2%         # simulate flaky producer
-        fail_mode: schema_violation
+        fail_rate: 2%         # accepts "2%" or 0.02; simulate flaky producer
+        fail_mode: schema_violation   # timeout | broker_not_available | schema_violation
 
     - name: wait-ack
       consume:
@@ -164,13 +164,14 @@ spec:
         expect:
           status: 200
           body:
-            status: in: [received, picking, shipped]
+            status:
+              in: [received, picking, shipped]
 
   checks:
     - name: order_ack_p99
       expr: |
         percentile(
-          latency(orders -> orders.ack),
+          latency('orders', 'orders.ack'),
           99
         ) < duration('200ms')
       window: 5m              # ignored in run mode, applied in watch mode
@@ -178,15 +179,17 @@ spec:
 
     - name: no_orphan_cancellations
       expr: |
-        forall e in stream('cancellations'):
-          exists o in stream('orders')
-            where o.orderId == e.orderId
-              and o.ts before e.ts
+        stream('cancellations').all(c,
+          stream('orders').exists(o,
+            o.payload.orderId == c.payload.orderId
+              && before(o.ts, c.ts)
+          )
+        )
       severity: warning
 
     - name: warehouse_http_availability
       expr: |
-        rate(http('/warehouse/orders/*').status == 200) > 0.995
+        rate(http('/warehouse/orders/*').map(e, int(e.payload.status) == 200)) > 0.995
       window: 1h
       severity: critical
 ```
@@ -210,19 +213,22 @@ CEL (Google Common Expression Language) chosen for: known semantics, proven sand
 
 ### 7.1 Added operators (on top of standard CEL)
 
+The check language is CEL plus a small set of streaming-aware functions.
+Universal/existential quantification uses CEL's standard `.all(e, P)` and
+`.exists(e, P)` macros — there is no special `forall`/`exists` keyword.
+
 | Operator | Semantics | Example |
 |---|---|---|
-| `stream(topic)` | Reference to a topic's observed events during the scenario | `stream('orders')` |
-| `latency(a -> b)` | Duration between matching events in two streams, by key | `latency(orders -> orders.ack)` |
-| `percentile(values, p)` | p-th percentile over a value stream | `percentile(latency(...), 99)` |
-| `rate(boolean_stream)` | Rolling pass-rate in the current window | `rate(http('/a').status == 200)` |
-| `forall e in S: P(e)` | Universal quantifier over a stream | `forall e in stream('x'): e.valid` |
-| `exists e in S: P(e)` | Existential quantifier | `exists o in stream('x'): o.id == k` |
-| `before`, `after` | Temporal ordering on event timestamps | `a.ts before b.ts` |
-| `implies` | Logical implication (syntactic sugar on CEL) | `A implies B` |
-| `within(duration)` | Temporal bound, used with `eventually` | `eventually[within('2s')] X` |
-| `duration('Ns')` | Parse duration literal | `duration('200ms')` |
-| `http(path_pattern)` | Reference to HTTP call history | `http('/warehouse/*').status` |
+| `stream(name)` | List of events observed in the named stream | `stream('orders')` |
+| `latency(from, to)` | Per-key durations from `from` events to the next matching `to` event; each `to` event is consumed at most once | `latency('orders', 'orders.ack')` |
+| `percentile(values, p)` | p-th percentile (Type 7 / linear interpolation); empty input is an error | `percentile(latency(...), 99)` |
+| `rate(list<bool>)` | Fraction of `true` values; empty list returns 0 | `rate(http('/api').map(e, int(e.payload.status) == 200))` |
+| `before(t1, t2)` | True when timestamp t1 is strictly before t2 | `before(o.ts, c.ts)` |
+| `duration(s)` | Standard CEL duration literal | `duration('200ms')` |
+| `http(pathPattern)` | Events for HTTP calls whose path matches a `*`-glob pattern | `http('/warehouse/*')` |
+
+Event shape exposed to CEL: `{stream, key, ts, headers, payload, direction}`.
+Payload fields are accessed through `.payload`, e.g. `o.payload.orderId`.
 
 ### 7.2 Window semantics
 
