@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/event-driven-tests-ai/edt/pkg/scenario"
 	"github.com/google/cel-go/cel"
@@ -41,7 +42,7 @@ func compileMatcher(rules []scenario.MatchRule) (*matcher, error) {
 func filterNonEmpty(rs []scenario.MatchRule) []scenario.MatchRule {
 	out := rs[:0:0]
 	for _, r := range rs {
-		if r.Key != "" {
+		if strings.TrimSpace(r.Key) != "" {
 			out = append(out, r)
 		}
 	}

@@ -58,3 +58,20 @@ extraneous: true
 	err := scenario.ValidateYAML(input)
 	require.Error(t, err)
 }
+
+func TestValidateAcceptsPercentageLiteral(t *testing.T) {
+	input := []byte(`
+apiVersion: edt.io/v1
+kind: Scenario
+metadata: { name: x }
+spec:
+  connectors: {}
+  steps:
+    - name: p
+      produce:
+        topic: orders
+        payload: "{}"
+        fail_rate: 2%
+`)
+	require.NoError(t, scenario.ValidateYAML(input))
+}

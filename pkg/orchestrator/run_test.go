@@ -255,6 +255,52 @@ func TestConsumeIgnoresRecordsFromOtherTopics(t *testing.T) {
 	assert.Len(t, store.Query("orders.ack"), 1)
 }
 
+func TestConsumePreservesRawStringPayloadAndHeaders(t *testing.T) {
+	now := time.Now()
+	fk := &fakeKafka{
+		consumeRecs: []kafka.Record{{
+			Topic:     "logs",
+			Key:       []byte("k1"),
+			Value:     []byte("hello world"),
+			Headers:   map[string][]byte{"trace-id": []byte("abc123")},
+			Timestamp: now.UnixNano(),
+		}},
+	}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name:    "c",
+		Consume: &scenario.ConsumeStep{Topic: "logs", Timeout: "100ms"},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	got := store.Query("logs")
+	require.Len(t, got, 1)
+	assert.Equal(t, "hello world", got[0].Payload)
+	assert.Equal(t, map[string]string{"trace-id": "abc123"}, got[0].Headers)
+}
+
+func TestConsumeWhitespaceOnlyMatchRuleFallsBackToFirstRecord(t *testing.T) {
+	now := time.Now()
+	fk := &fakeKafka{
+		consumeRecs: []kafka.Record{
+			{Topic: "orders.ack", Key: []byte("1"), Value: []byte(`{"orderId":"1"}`), Timestamp: now.UnixNano()},
+			{Topic: "orders.ack", Key: []byte("2"), Value: []byte(`{"orderId":"2"}`), Timestamp: now.UnixNano()},
+		},
+	}
+	store := events.NewMemStore(0)
+	r := orchestrator.New(&scenario.Scenario{}, fk, nil, store)
+	s := &scenario.Scenario{Spec: scenario.Spec{Steps: []scenario.Step{{
+		Name: "c",
+		Consume: &scenario.ConsumeStep{
+			Topic:   "orders.ack",
+			Timeout: "100ms",
+			Match:   []scenario.MatchRule{{Key: "   "}},
+		},
+	}}}}
+	require.NoError(t, r.Run(context.Background(), s))
+	assert.Len(t, store.Query("orders.ack"), 1)
+}
+
 func TestHTTPStepRecordsAndChecksExpect(t *testing.T) {
 	fh := &fakeHTTP{next: &httpc.Response{Status: 200, Body: map[string]any{"ok": true}, Latency: 12 * time.Millisecond}}
 	store := events.NewMemStore(0)

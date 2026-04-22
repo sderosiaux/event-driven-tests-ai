@@ -254,12 +254,12 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 		if rec.Topic != c.Topic {
 			return nil
 		}
-		var payload any
-		_ = json.Unmarshal(rec.Value, &payload)
+		payload := decodeConsumedValue(rec.Value)
 		r.Store.Append(events.Event{
 			Stream:    rec.Topic,
 			Key:       string(rec.Key),
 			Ts:        time.Unix(0, rec.Timestamp).UTC(),
+			Headers:   kafkaHeadersToStrings(rec.Headers),
 			Payload:   payload,
 			Direction: events.Consumed,
 		})
@@ -441,6 +441,25 @@ func encodeWireValue(payload any) []byte {
 	}
 	b, _ := json.Marshal(payload)
 	return b
+}
+
+func decodeConsumedValue(v []byte) any {
+	var payload any
+	if err := json.Unmarshal(v, &payload); err == nil {
+		return payload
+	}
+	return string(v)
+}
+
+func kafkaHeadersToStrings(headers map[string][]byte) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for k, v := range headers {
+		out[k] = string(v)
+	}
+	return out
 }
 
 // parseRate turns "50/s" into the per-record sleep duration. "" → 0 (no throttle).
