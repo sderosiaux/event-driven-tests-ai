@@ -1,0 +1,116 @@
+package httpc_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/event-driven-tests-ai/edt/pkg/httpc"
+	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func newServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestGETJSONBody(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "count": 42})
+	})
+
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	resp, err := c.Do(context.Background(), &scenario.HTTPStep{Method: "GET", Path: "/foo"})
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.Status)
+	body := resp.Body.(map[string]any)
+	assert.Equal(t, "ok", body["status"])
+}
+
+func TestExpectStatusPasses(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(204)
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	resp, _ := c.Do(context.Background(), &scenario.HTTPStep{Method: "DELETE", Path: "/x"})
+
+	assert.NoError(t, httpc.CheckExpectation(&scenario.HTTPExpect{Status: 204}, resp))
+	assert.Error(t, httpc.CheckExpectation(&scenario.HTTPExpect{Status: 200}, resp))
+}
+
+func TestExpectBodyField(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"region":"eu","plan":"pro"}`))
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	resp, _ := c.Do(context.Background(), &scenario.HTTPStep{Path: "/me"})
+
+	assert.NoError(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Status: 200,
+		Body:   map[string]any{"region": "eu"},
+	}, resp))
+
+	assert.Error(t, httpc.CheckExpectation(&scenario.HTTPExpect{
+		Body: map[string]any{"plan": "free"},
+	}, resp))
+}
+
+func TestBearerAuth(t *testing.T) {
+	gotAuth := ""
+	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{
+		BaseURL: srv.URL,
+		Auth:    &scenario.HTTPAuth{Type: "bearer", Token: "tok-xyz"},
+	})
+	_, err := c.Do(context.Background(), &scenario.HTTPStep{Path: "/secure"})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer tok-xyz", gotAuth)
+}
+
+func TestBasicAuth(t *testing.T) {
+	gotUser, gotPass, gotOK := "", "", false
+	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, gotOK = r.BasicAuth()
+		w.WriteHeader(200)
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{
+		BaseURL: srv.URL,
+		Auth:    &scenario.HTTPAuth{Type: "basic", User: "alice", Pass: "secret"},
+	})
+	_, err := c.Do(context.Background(), &scenario.HTTPStep{Path: "/x"})
+	require.NoError(t, err)
+	assert.True(t, gotOK)
+	assert.Equal(t, "alice", gotUser)
+	assert.Equal(t, "secret", gotPass)
+}
+
+func TestPostBody(t *testing.T) {
+	var got string
+	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 1024)
+		n, _ := r.Body.Read(buf)
+		got = string(buf[:n])
+		w.WriteHeader(201)
+	})
+	c := httpc.NewClient(&scenario.HTTPConnector{BaseURL: srv.URL})
+	_, err := c.Do(context.Background(), &scenario.HTTPStep{
+		Method: "POST",
+		Path:   "/orders",
+		Body:   `{"id":1}`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `{"id":1}`, got)
+}
