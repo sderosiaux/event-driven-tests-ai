@@ -5,13 +5,13 @@ on:
   pull_request:
 
 jobs:
-  test:
+  go:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
           cache: true
       - name: Vet
         run: go vet ./...
@@ -19,3 +19,33 @@ jobs:
         run: go build ./...
       - name: Test
         run: go test ./... -race -count=1
+
+  sdk-ts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sdk/ts/package-lock.json
+      - name: Build edt binary (for round-trip tests)
+        working-directory: .
+        run: go build -o /tmp/edt ./cmd/edt
+      - name: Install
+        run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+      - name: Test
+        env:
+          EDT_BIN: /tmp/edt
+        run: npm test
