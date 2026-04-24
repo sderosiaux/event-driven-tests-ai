@@ -3,15 +3,25 @@
 package kafka
 
 import (
+	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/scenario"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/aws"
+	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
@@ -50,9 +60,36 @@ func buildAuthOpts(auth *scenario.KafkaAuth) ([]kgo.Opt, error) {
 		return []kgo.Opt{kgo.Dialer(d.DialContext)}, nil
 
 	case scenario.KafkaAuthOAuthBearer:
-		return nil, fmt.Errorf("kafka: SASL/OAUTHBEARER is wired in M3, not available in M1")
+		fetcher, err := newOIDCTokenFetcher(auth)
+		if err != nil {
+			return nil, err
+		}
+		return []kgo.Opt{
+			saslTLSDialer(),
+			kgo.SASL(oauth.Oauth(fetcher)),
+		}, nil
+
 	case scenario.KafkaAuthAWSIAM:
-		return nil, fmt.Errorf("kafka: AWS IAM is wired in M3, not available in M1")
+		creds := aws.Auth{
+			AccessKey:    auth.Username,
+			SecretKey:    auth.Password,
+			SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
+			UserAgent:    "edt/" + auth.Region,
+		}
+		// Fall back to AWS env if explicit scenario fields are empty.
+		if creds.AccessKey == "" {
+			creds.AccessKey = os.Getenv("AWS_ACCESS_KEY_ID")
+		}
+		if creds.SecretKey == "" {
+			creds.SecretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+		}
+		if creds.AccessKey == "" || creds.SecretKey == "" {
+			return nil, fmt.Errorf("kafka: aws_iam requires username/password (access/secret keys) or AWS_* env vars")
+		}
+		return []kgo.Opt{
+			saslTLSDialer(),
+			kgo.SASL(creds.AsManagedStreamingIAMMechanism()),
+		}, nil
 
 	default:
 		return nil, fmt.Errorf("kafka: unknown auth type %q", auth.Type)
@@ -65,6 +102,70 @@ func buildAuthOpts(auth *scenario.KafkaAuth) ([]kgo.Opt, error) {
 func saslTLSDialer() kgo.Opt {
 	d := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}}
 	return kgo.Dialer(d.DialContext)
+}
+
+// newOIDCTokenFetcher returns a thread-safe closure that fetches and caches
+// a bearer token via the OAuth 2.0 client_credentials grant. franz-go calls
+// the closure each time it needs a fresh SASL session; we re-use a cached
+// token until it is within 60s of expiry, then refresh.
+//
+// Required fields on auth: TokenURL, ClientID, Password (= client_secret).
+// Optional: Scopes.
+func newOIDCTokenFetcher(auth *scenario.KafkaAuth) (func(context.Context) (oauth.Auth, error), error) {
+	if auth.TokenURL == "" || auth.ClientID == "" || auth.Password == "" {
+		return nil, fmt.Errorf("kafka: sasl_oauthbearer requires token_url, client_id and password (client_secret)")
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	var (
+		mu       sync.Mutex
+		cached   string
+		expiryAt time.Time
+	)
+	return func(ctx context.Context) (oauth.Auth, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cached != "" && time.Now().Before(expiryAt.Add(-60*time.Second)) {
+			return oauth.Auth{Token: cached}, nil
+		}
+		form := url.Values{}
+		form.Set("grant_type", "client_credentials")
+		form.Set("client_id", auth.ClientID)
+		form.Set("client_secret", auth.Password)
+		if len(auth.Scopes) > 0 {
+			form.Set("scope", strings.Join(auth.Scopes, " "))
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, auth.TokenURL, bytes.NewBufferString(form.Encode()))
+		if err != nil {
+			return oauth.Auth{}, err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := client.Do(req)
+		if err != nil {
+			return oauth.Auth{}, fmt.Errorf("kafka: oidc token fetch: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode >= 300 {
+			return oauth.Auth{}, fmt.Errorf("kafka: oidc token endpoint returned %d: %s", resp.StatusCode, string(body))
+		}
+		var out struct {
+			AccessToken string `json:"access_token"`
+			ExpiresIn   int    `json:"expires_in"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			return oauth.Auth{}, fmt.Errorf("kafka: oidc token decode: %w", err)
+		}
+		if out.AccessToken == "" {
+			return oauth.Auth{}, fmt.Errorf("kafka: oidc response missing access_token")
+		}
+		cached = out.AccessToken
+		ttl := time.Duration(out.ExpiresIn) * time.Second
+		if ttl <= 0 {
+			ttl = 5 * time.Minute
+		}
+		expiryAt = time.Now().Add(ttl)
+		return oauth.Auth{Token: cached}, nil
+	}, nil
 }
 
 func buildMTLSConfig(auth *scenario.KafkaAuth) (*tls.Config, error) {

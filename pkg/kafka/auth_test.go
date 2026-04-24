@@ -47,14 +47,49 @@ func TestBuildAuthOptsMTLSBadPath(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestBuildAuthOptsOAuthNotYet(t *testing.T) {
+func TestBuildAuthOptsOAuthRequiresTokenURLAndClientID(t *testing.T) {
 	_, err := buildAuthOpts(&scenario.KafkaAuth{Type: scenario.KafkaAuthOAuthBearer})
-	require.ErrorContains(t, err, "M3")
+	require.ErrorContains(t, err, "token_url")
 }
 
-func TestBuildAuthOptsAWSIAMNotYet(t *testing.T) {
+func TestBuildAuthOptsOAuthHappyPath(t *testing.T) {
+	opts, err := buildAuthOpts(&scenario.KafkaAuth{
+		Type:     scenario.KafkaAuthOAuthBearer,
+		TokenURL: "https://idp.example/token",
+		ClientID: "edt",
+		Password: "secret",
+		Scopes:   []string{"kafka"},
+	})
+	require.NoError(t, err)
+	assert.Len(t, opts, 2, "dialer + SASL")
+}
+
+func TestBuildAuthOptsAWSIAMRequiresKeys(t *testing.T) {
+	// Isolate from the host's AWS env so an operator running tests with
+	// real credentials does not accidentally make this pass.
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	_, err := buildAuthOpts(&scenario.KafkaAuth{Type: scenario.KafkaAuthAWSIAM})
-	require.ErrorContains(t, err, "M3")
+	require.ErrorContains(t, err, "aws_iam requires")
+}
+
+func TestBuildAuthOptsAWSIAMHappyPath(t *testing.T) {
+	opts, err := buildAuthOpts(&scenario.KafkaAuth{
+		Type:     scenario.KafkaAuthAWSIAM,
+		Username: "AKIA...",
+		Password: "secretKey",
+		Region:   "us-east-1",
+	})
+	require.NoError(t, err)
+	assert.Len(t, opts, 2)
+}
+
+func TestBuildAuthOptsAWSIAMEnvFallback(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAfromenv")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secretfromenv")
+	opts, err := buildAuthOpts(&scenario.KafkaAuth{Type: scenario.KafkaAuthAWSIAM})
+	require.NoError(t, err)
+	assert.Len(t, opts, 2)
 }
 
 func TestBuildAuthOptsUnknown(t *testing.T) {
