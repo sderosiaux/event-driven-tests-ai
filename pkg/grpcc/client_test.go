@@ -152,6 +152,36 @@ func TestGRPCDialRejectsEmptyAddress(t *testing.T) {
 	assert.Contains(t, err.Error(), "address")
 }
 
+// Codex P2 2026-04-24: Port.Invoke used to cache the first ClientConn and
+// ignore every subsequent connector argument, silently routing to the first
+// address. After the fix, a changed address must redial.
+func TestGRPCPortRedialsOnConnectorChange(t *testing.T) {
+	addrA := startHealthServer(t)
+	addrB := startHealthServer(t)
+	require.NotEqual(t, addrA, addrB)
+
+	port := grpcc.NewPort()
+	defer port.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	step := &scenario.GRPCStep{
+		Proto:   healthProto,
+		Method:  "grpc.health.v1.Health/Check",
+		Request: `{"service":"edt"}`,
+	}
+
+	// First call targets addrA.
+	resp, err := port.Invoke(ctx, &scenario.GRPCConnector{Address: addrA}, step)
+	require.NoError(t, err)
+	require.Equal(t, 0, resp.Code)
+
+	// Second call targets addrB — must succeed against the new server, not
+	// the cached connection to addrA.
+	resp, err = port.Invoke(ctx, &scenario.GRPCConnector{Address: addrB}, step)
+	require.NoError(t, err)
+	require.Equal(t, 0, resp.Code)
+}
+
 // Sanity: the Port adapter closes underlying conns.
 func TestGRPCPortReusesAndClosesConn(t *testing.T) {
 	addr := startHealthServer(t)

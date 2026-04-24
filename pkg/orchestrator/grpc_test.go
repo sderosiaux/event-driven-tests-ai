@@ -174,3 +174,43 @@ func TestGRPCStepRejectsMissingPort(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no client configured")
 }
+
+// Codex P1 2026-04-24: equalAny used to stringify both sides via fmt.Sprint,
+// silently equating "5" (string) with 5 (number). Strict compare now refuses.
+func TestGRPCExpectBodyStringVsNumberMismatch(t *testing.T) {
+	store := events.NewMemStore(0)
+	fake := &fakeGRPCPort{resp: &grpcc.Invocation{Code: 0, Body: map[string]any{"count": float64(5)}}}
+	r := orchestrator.New(&scenario.Scenario{}, nil, nil, store)
+	r.GRPC = fake
+
+	s := grpcScenario(scenario.Step{
+		Name: "strict",
+		GRPC: &scenario.GRPCStep{
+			Proto:   "x",
+			Method:  "pkg.Svc/Check",
+			Request: `{}`,
+			Expect:  &scenario.GRPCExpect{Body: map[string]any{"count": "5"}}, // string vs number
+		},
+	})
+	err := r.Run(context.Background(), s)
+	require.Error(t, err, "string 5 must not match number 5")
+	assert.Contains(t, err.Error(), "body field \"count\"")
+}
+
+func TestGRPCExpectBodyNumericCoercionStillWorks(t *testing.T) {
+	store := events.NewMemStore(0)
+	fake := &fakeGRPCPort{resp: &grpcc.Invocation{Code: 0, Body: map[string]any{"count": float64(5)}}}
+	r := orchestrator.New(&scenario.Scenario{}, nil, nil, store)
+	r.GRPC = fake
+
+	s := grpcScenario(scenario.Step{
+		Name: "numeric",
+		GRPC: &scenario.GRPCStep{
+			Proto:   "x",
+			Method:  "pkg.Svc/Check",
+			Request: `{}`,
+			Expect:  &scenario.GRPCExpect{Body: map[string]any{"count": 5}}, // int vs float64
+		},
+	})
+	require.NoError(t, r.Run(context.Background(), s), "numeric types across int/float must still match")
+}

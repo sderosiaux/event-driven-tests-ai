@@ -81,15 +81,52 @@ func checkGRPCExpect(expect *scenario.GRPCExpect, resp *GRPCResponse) error {
 	return nil
 }
 
-// equalAny compares two JSON-shaped values. Numbers are normalised through
-// float64 so a JSON-decoded number matches a Go literal.
+// equalAny compares two JSON-shaped values with strict type awareness.
+// Numbers normalise through float64 only when both operands are numeric;
+// a string "5" and a number 5 do NOT compare equal (codex P1 2026-04-24:
+// the fmt.Sprint fallback silently passed comparisons that should fail).
 func equalAny(got, want any) bool {
 	gn, gok := toFloat(got)
 	wn, wok := toFloat(want)
 	if gok && wok {
 		return gn == wn
 	}
-	return fmt.Sprint(got) == fmt.Sprint(want)
+	if gok != wok {
+		return false // numeric vs non-numeric mismatch
+	}
+	switch w := want.(type) {
+	case string:
+		g, ok := got.(string)
+		return ok && g == w
+	case bool:
+		g, ok := got.(bool)
+		return ok && g == w
+	case nil:
+		return got == nil
+	case map[string]any:
+		g, ok := got.(map[string]any)
+		if !ok || len(g) != len(w) {
+			return false
+		}
+		for k, v := range w {
+			if !equalAny(g[k], v) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		g, ok := got.([]any)
+		if !ok || len(g) != len(w) {
+			return false
+		}
+		for i, v := range w {
+			if !equalAny(g[i], v) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func toFloat(v any) (float64, bool) {

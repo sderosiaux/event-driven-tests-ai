@@ -152,9 +152,6 @@ func resolveMethod(step *scenario.GRPCStep) (input, output protoreflect.MessageD
 	if source == "" {
 		return nil, nil, fmt.Errorf("grpc: step must set either `proto` (inline) or `proto_file`")
 	}
-	if strings.Contains(source, "\nimport ") || strings.HasPrefix(strings.TrimSpace(source), "import ") {
-		return nil, nil, fmt.Errorf("grpc: .proto with imports is not yet supported — inline the dependency")
-	}
 	path := "service.proto"
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
@@ -169,6 +166,15 @@ func resolveMethod(step *scenario.GRPCStep) (input, output protoreflect.MessageD
 		return nil, nil, fmt.Errorf("grpc: proto compile produced no descriptors")
 	}
 	file := files[0]
+	// Codex P2 2026-04-24: detect imports via the parsed descriptor rather
+	// than a string scan over the raw source. The raw scan also matched
+	// comments that legitimately used the word "import". Well-known protos
+	// (google/protobuf/*) auto-resolved by WithStandardImports aren't on
+	// file.Imports(); only user-declared imports are.
+	if file.Imports().Len() > 0 {
+		first := file.Imports().Get(0)
+		return nil, nil, fmt.Errorf("grpc: .proto with imports is not yet supported (found %q) — inline the dependency", first.Path())
+	}
 
 	// Method format: package.Service/Method (leading slash optional).
 	m := strings.TrimPrefix(step.Method, "/")
