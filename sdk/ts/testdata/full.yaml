@@ -1,0 +1,67 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: order-flow-e2e
+  labels:
+    team: commerce
+    env: staging
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: localhost:9092
+      auth:
+        type: sasl_scram_sha_512
+        username: alice
+        password: secret
+      schema_registry:
+        url: http://sr:8081
+        flavor: confluent
+    http:
+      base_url: https://api.example.com
+      auth:
+        type: bearer
+        token: tok123
+  data:
+    orders:
+      schema:
+        source: schema_registry
+        subject: orders-value
+      generator:
+        strategy: faker
+        seed: 42
+        overrides:
+          orderId: ${uuid()}
+          amount: ${faker.number.float(10, 500)}
+  steps:
+    - name: place-order
+      produce:
+        topic: orders
+        payload: ${data.orders}
+        rate: 50/s
+        count: 100
+        fail_rate: 0.02
+        fail_mode: schema_violation
+    - name: wait-ack
+      consume:
+        topic: orders.ack
+        group: edt-run
+        timeout: 5s
+        match:
+          - key: payload.orderId == previous.orderId
+        slow_mode:
+          pause_every: 100
+          pause_for: 500ms
+    - name: check-warehouse
+      http:
+        method: GET
+        path: /warehouse/orders/abc
+        expect:
+          status: 200
+  checks:
+    - name: order_ack_p99
+      expr: percentile(latency('orders', 'orders.ack'), 99) < duration('200ms')
+      window: 5m
+      severity: critical
+    - name: no_orphan_cancellations
+      expr: "forall e in stream('cancellations'): exists o in stream('orders') where o.orderId == e.orderId && o.ts.before(e.ts)"
+      severity: warning
