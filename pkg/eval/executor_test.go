@@ -2,6 +2,8 @@ package eval_test
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -166,4 +168,65 @@ func TestExecutorDoesNotReuseMatchedOutputForRepeatedKey(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.InDelta(t, 5.0, results[0].Value, 1e-9)
 	assert.Equal(t, 2, judge.calls)
+}
+
+func TestRunIterationsReseedsPerRound(t *testing.T) {
+	store := events.NewMemStore(0)
+	judge := &stubJudge{scoreFor: func(p eval.Pair) eval.Score { return eval.Score{Value: 4.5} }}
+	exec := eval.New(eval.Config{Judge: judge, MatchTimeout: 50 * time.Millisecond})
+
+	round := 0
+	reseed := func(_ context.Context) error {
+		round++
+		key := "r-" + strconv.Itoa(round)
+		now := time.Now()
+		store.Append(events.Event{Stream: "orders.new", Key: key, Ts: now, Payload: map[string]any{"round": round}, Direction: events.Produced})
+		store.Append(events.Event{Stream: "orders.triaged", Key: key, Ts: now, Payload: map[string]any{"ok": true}, Direction: events.Produced})
+		return nil
+	}
+
+	require.NoError(t, exec.RunIterations(context.Background(), mkScenario(), store, reseed, 3))
+
+	results := exec.Finalize(mkScenario())
+	require.Len(t, results, 1)
+	assert.Equal(t, 3, results[0].Over, "each iteration must produce one pair")
+	assert.Equal(t, 3, judge.calls)
+}
+
+func TestRunIterationsStopsOnReseedError(t *testing.T) {
+	store := events.NewMemStore(0)
+	judge := &stubJudge{scoreFor: func(eval.Pair) eval.Score { return eval.Score{Value: 1} }}
+	exec := eval.New(eval.Config{Judge: judge, MatchTimeout: 10 * time.Millisecond})
+
+	boom := errors.New("kafka unavailable")
+	reseed := func(_ context.Context) error { return boom }
+
+	err := exec.RunIterations(context.Background(), mkScenario(), store, reseed, 5)
+	require.ErrorIs(t, err, boom)
+	assert.Equal(t, 0, judge.calls, "no pair should be judged if reseed fails on iteration 0")
+}
+
+func TestRunIterationsSkipsIterationsThatProduceNoFreshInputs(t *testing.T) {
+	store := events.NewMemStore(0)
+	judge := &stubJudge{scoreFor: func(eval.Pair) eval.Score { return eval.Score{Value: 5} }}
+	exec := eval.New(eval.Config{Judge: judge, MatchTimeout: 20 * time.Millisecond})
+
+	calls := 0
+	reseed := func(_ context.Context) error {
+		calls++
+		if calls == 2 {
+			return nil
+		}
+		now := time.Now()
+		key := "r-" + strconv.Itoa(calls)
+		store.Append(events.Event{Stream: "orders.new", Key: key, Ts: now, Payload: map[string]any{}, Direction: events.Produced})
+		store.Append(events.Event{Stream: "orders.triaged", Key: key, Ts: now, Payload: map[string]any{"ok": true}, Direction: events.Produced})
+		return nil
+	}
+
+	require.NoError(t, exec.RunIterations(context.Background(), mkScenario(), store, reseed, 3))
+	results := exec.Finalize(mkScenario())
+	require.Len(t, results, 1)
+	assert.Equal(t, 2, results[0].Over, "iteration 2 produced no inputs, it must be silently skipped")
+	assert.Equal(t, 3, calls, "reseed still invoked 3 times")
 }

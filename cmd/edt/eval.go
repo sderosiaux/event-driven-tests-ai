@@ -103,24 +103,10 @@ func doEval(ctx context.Context, stdout, stderr io.Writer, f *evalFlags) error {
 		runner.Codec = sr.NewCodec(sc)
 	}
 
-	// Seed: only run the scenario's produce steps. Eval mode should not execute
-	// consume/HTTP/sleep steps from the main scenario while preparing inputs.
-	if err := runner.Run(ctx, produceOnlyScenario(s)); err != nil {
-		return fmt.Errorf("eval: scenario seeding: %w", err)
-	}
-
-	// Collect the inputs from the events store so the judge has the original
-	// payloads to reason about.
-	inputs := inputEvents(s, store)
-	if len(inputs) == 0 {
-		return fmt.Errorf("eval: no input events produced on %v — nothing to judge", s.Spec.AgentUnderTest.Consumes)
-	}
-
 	judge := eval.NewLLMJudge(f.apiKey, f.model)
 	exec := eval.New(eval.Config{
 		Judge:        judge,
 		MatchTimeout: f.matchTimeout,
-		Iterations:   f.iterations,
 		OnScore: func(name string, sc eval.Score) {
 			if sc.Err != nil {
 				fmt.Fprintf(stderr, "eval[%s]: judge error: %v\n", name, sc.Err)
@@ -129,7 +115,18 @@ func doEval(ctx context.Context, stdout, stderr io.Writer, f *evalFlags) error {
 			fmt.Fprintf(stderr, "eval[%s]: score=%.2f rationale=%q\n", name, sc.Value, truncateCLI(sc.Rationale, 120))
 		},
 	})
-	if err := exec.RunInputs(ctx, s, store, inputs); err != nil {
+
+	// Each iteration reseeds the scenario's produce steps and judges only the
+	// events this iteration created. --iterations now controls sample count,
+	// not "first N events of a single seeding batch".
+	seedOnly := produceOnlyScenario(s)
+	reseed := func(ctx context.Context) error {
+		if err := runner.Run(ctx, seedOnly); err != nil {
+			return fmt.Errorf("scenario seeding: %w", err)
+		}
+		return nil
+	}
+	if err := exec.RunIterations(ctx, s, store, reseed, f.iterations); err != nil {
 		return err
 	}
 	results := exec.Finalize(s)
@@ -155,16 +152,6 @@ func doEval(ctx context.Context, stdout, stderr io.Writer, f *evalFlags) error {
 		}
 	}
 	return nil
-}
-
-// inputEvents pulls every event the scenario produced onto the
-// agent-under-test's consume topics — these are the inputs we judge against.
-func inputEvents(s *scenario.Scenario, store events.Store) []events.Event {
-	var out []events.Event
-	for _, topic := range s.Spec.AgentUnderTest.Consumes {
-		out = append(out, store.Query(topic)...)
-	}
-	return out
 }
 
 func produceOnlyScenario(s *scenario.Scenario) *scenario.Scenario {

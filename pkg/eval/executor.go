@@ -146,35 +146,106 @@ func (e *Executor) Finalize(s *scenario.Scenario) []Result {
 // topologies (N inputs → M outputs, temporal joins) should call Observe
 // directly from their own correlator.
 func (e *Executor) RunInputs(ctx context.Context, s *scenario.Scenario, store events.Store, inputs []events.Event) error {
-	if s.Spec.AgentUnderTest == nil {
-		return fmt.Errorf("eval: scenario.spec.agent_under_test is required")
+	if err := validateAgent(s); err != nil {
+		return err
 	}
 	outStreams := s.Spec.AgentUnderTest.Produces
-	if len(outStreams) == 0 {
-		return fmt.Errorf("eval: agent_under_test must declare at least one produces topic")
-	}
 
 	used := make(map[string]map[int]struct{}, len(outStreams))
 	for i, in := range inputs {
 		if e.cfg.Iterations > 0 && i >= e.cfg.Iterations {
 			break
 		}
-		out, ok := waitForOutput(ctx, store, outStreams, in.Key, e.cfg.MatchTimeout, used)
-		if !ok {
-			e.Observe(ctx, s, Pair{
-				Input:  asMap(in.Payload),
-				Output: map[string]any{"_missing": true, "_reason": "no matching output within timeout"},
-				Meta:   map[string]any{"scenario": s.Metadata.Name, "iteration": i},
-			})
-			continue
-		}
-		e.Observe(ctx, s, Pair{
-			Input:  asMap(in.Payload),
-			Output: asMap(out.Payload),
-			Meta:   map[string]any{"scenario": s.Metadata.Name, "iteration": i},
-		})
+		e.scorePair(ctx, s, store, in, outStreams, used, i)
 	}
 	return nil
+}
+
+// RunIterations drives `iterations` rounds of: reseed → pair newly-seeded
+// inputs with matching outputs → judge. This is what "--iterations N" in the
+// CLI should give you: N distinct samples per eval, not N capped by a single
+// seeding batch.
+//
+// reseed is expected to call the scenario's produce steps. It runs once per
+// iteration; the executor only consumes events that appeared after the
+// snapshot taken before the reseed call, so previously-judged inputs are not
+// re-scored.
+func (e *Executor) RunIterations(ctx context.Context, s *scenario.Scenario, store events.Store, reseed func(ctx context.Context) error, iterations int) error {
+	if err := validateAgent(s); err != nil {
+		return err
+	}
+	if reseed == nil {
+		return fmt.Errorf("eval: reseed callback is required for RunIterations")
+	}
+	if iterations <= 0 {
+		iterations = 1
+	}
+	inStreams := s.Spec.AgentUnderTest.Consumes
+	outStreams := s.Spec.AgentUnderTest.Produces
+	used := make(map[string]map[int]struct{}, len(outStreams))
+
+	for iter := 0; iter < iterations; iter++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Snapshot input-stream cursors before reseeding so we only judge the
+		// events this iteration produced, not the cumulative backlog.
+		cursors := make(map[string]int, len(inStreams))
+		for _, topic := range inStreams {
+			cursors[topic] = len(store.Query(topic))
+		}
+		if err := reseed(ctx); err != nil {
+			return fmt.Errorf("eval iteration %d: reseed: %w", iter, err)
+		}
+		fresh := freshInputsAfter(store, inStreams, cursors)
+		if len(fresh) == 0 {
+			continue
+		}
+		for _, in := range fresh {
+			e.scorePair(ctx, s, store, in, outStreams, used, iter)
+		}
+	}
+	return nil
+}
+
+func (e *Executor) scorePair(ctx context.Context, s *scenario.Scenario, store events.Store, in events.Event, outStreams []string, used map[string]map[int]struct{}, iter int) {
+	out, ok := waitForOutput(ctx, store, outStreams, in.Key, e.cfg.MatchTimeout, used)
+	if !ok {
+		e.Observe(ctx, s, Pair{
+			Input:  asMap(in.Payload),
+			Output: map[string]any{"_missing": true, "_reason": "no matching output within timeout"},
+			Meta:   map[string]any{"scenario": s.Metadata.Name, "iteration": iter},
+		})
+		return
+	}
+	e.Observe(ctx, s, Pair{
+		Input:  asMap(in.Payload),
+		Output: asMap(out.Payload),
+		Meta:   map[string]any{"scenario": s.Metadata.Name, "iteration": iter},
+	})
+}
+
+func validateAgent(s *scenario.Scenario) error {
+	if s.Spec.AgentUnderTest == nil {
+		return fmt.Errorf("eval: scenario.spec.agent_under_test is required")
+	}
+	if len(s.Spec.AgentUnderTest.Produces) == 0 {
+		return fmt.Errorf("eval: agent_under_test must declare at least one produces topic")
+	}
+	return nil
+}
+
+func freshInputsAfter(st events.Store, streams []string, cursors map[string]int) []events.Event {
+	var out []events.Event
+	for _, topic := range streams {
+		all := st.Query(topic)
+		start := cursors[topic]
+		if start >= len(all) {
+			continue
+		}
+		out = append(out, all[start:]...)
+	}
+	return out
 }
 
 // waitForOutput polls the store every 50ms for any event in outStreams whose
