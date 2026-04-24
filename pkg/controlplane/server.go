@@ -150,6 +150,7 @@ func (s *Server) routes() {
 	s.router.Group(func(r chi.Router) {
 		r.Use(editor)
 		s.api.MountScenarioWrites(r)
+		s.api.MountAdhocRun(r)
 		s.api.MountWorkerWrites(r)
 	})
 	s.router.Group(func(r chi.Router) {

@@ -20,7 +20,8 @@
     <button id="btn-new">New</button>
     <button id="btn-copy">Copy YAML</button>
     <button id="btn-validate">Validate</button>
-    <button id="btn-save" class="primary">Save to control plane</button>
+    <button id="btn-save">Save</button>
+    <button id="btn-run" class="primary">Run live ▶</button>
   </div>
 </header>
 
@@ -71,9 +72,12 @@
 
   <section class="canvas-wrap">
     <div class="canvas-toolbar">
-      <span class="muted">Drag cards to reorder. Click a card to edit. The scenario runs top to bottom.</span>
+      <span class="muted">Drag cards anywhere on the canvas. Execution order = Y position (top → bottom). Click <strong>Run live</strong> to execute against the real stack.</span>
     </div>
     <div id="canvas" class="canvas"></div>
+    <div class="results-pane" aria-label="Last run result">
+      <div id="results"></div>
+    </div>
   </section>
 
   <aside class="yaml-pane" aria-label="YAML preview">

@@ -117,42 +117,76 @@ button.wide:hover {
   color: var(--accent);
 }
 
-/* Canvas: flow of step cards connected by SVG arrows. */
-.canvas-wrap { position: relative; background: var(--bg); overflow-y: auto; }
+/* Canvas: free-form, absolute-positioned step cards connected by SVG
+   bezier lines. Drag by the header to reposition; execution order is
+   derived from Y coordinate. */
+.canvas-wrap {
+  position: relative;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .canvas-toolbar {
-  position: sticky;
-  top: 0;
   background: var(--bg);
   padding: 10px 24px;
   border-bottom: 1px solid var(--border);
-  z-index: 2;
+  flex: 0 0 auto;
   font-size: 12px;
 }
 .canvas {
   position: relative;
-  padding: 24px;
-  min-height: calc(100% - 40px);
+  padding: 0;
+  flex: 1;
+  overflow: auto;
+  /* Dotted grid so free positioning has a visual anchor. */
+  background-image:
+    linear-gradient(to right,  rgba(0,0,0,0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0,0,0,0.04) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
+.canvas svg.connections {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.connection { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; }
+.connection-arrow { fill: #94a3b8; }
 .canvas-empty {
   margin: 80px auto;
-  max-width: 440px;
+  max-width: 480px;
   text-align: center;
   color: var(--muted);
+  background: var(--surface);
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
 }
 .canvas-empty h3 { color: var(--text); margin-bottom: 8px; }
 
-/* Step card. Drag handle = the whole header. */
+/* Step card, absolute-positioned inside the canvas. */
 .card {
+  position: absolute;
+  width: 320px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  margin: 0 auto 40px;
-  max-width: 520px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
   cursor: default;
-  transition: box-shadow 0.15s, border-color 0.15s;
-  position: relative;
+  transition: box-shadow 0.15s, border-color 0.15s, transform 0.08s;
+  z-index: 1;
 }
+.card.dragging {
+  opacity: 0.85;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.15);
+  z-index: 10;
+  transform: scale(1.01);
+}
+.card.verdict-pass  { border-color: var(--pass); box-shadow: 0 0 0 2px rgba(21,128,61,0.15); }
+.card.verdict-fail  { border-color: var(--fail); box-shadow: 0 0 0 2px rgba(185,28,28,0.15); }
+.card.verdict-error { border-color: var(--warn); box-shadow: 0 0 0 2px rgba(180,83,9,0.15); }
 .card.dragging {
   opacity: 0.5;
   box-shadow: 0 8px 24px rgba(0,0,0,0.12);
@@ -208,29 +242,49 @@ button.wide:hover {
 .card .body .field:last-child { margin-bottom: 0; }
 .card .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
-/* Arrow between cards, rendered via an absolute-positioned SVG. */
-.card + .card::before {
-  content: "";
-  position: absolute;
-  top: -28px;
-  left: 50%;
-  width: 2px;
-  height: 28px;
-  background: var(--border);
-  transform: translateX(-50%);
+/* Drop-target styling during drag (kept for future drop zones). */
+.card.drop-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.card + .card::after {
-  content: "";
-  position: absolute;
-  top: -8px;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-top: 8px solid var(--border);
-  transform: translateX(-50%);
+
+/* Results pane at the bottom of the canvas area — shows last run verdict. */
+.results-pane {
+  flex: 0 0 auto;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px 24px;
 }
+.results-pane .result-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0 10px;
+  font-size: 13px;
+}
+.results-pane .result-head strong {
+  padding: 2px 10px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.results-pane .result-head.status-pass  strong { background: #dcfce7; color: var(--pass); border-color: #86efac; }
+.results-pane .result-head.status-fail  strong { background: #fee2e2; color: var(--fail); border-color: #fca5a5; }
+.results-pane .result-head.status-error strong { background: #fef3c7; color: var(--warn); border-color: #fcd34d; }
+.results-pane .spaced { margin-left: auto; }
+.results-pane .run-error {
+  padding: 8px 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 5px;
+  color: var(--fail);
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.results-pane table { font-size: 12px; }
 
 /* YAML pane. */
 .yaml-toolbar {
