@@ -128,11 +128,13 @@ func (s *Server) routes() {
 		r.Use(viewer)
 		s.api.MountScenarioReads(r)
 		s.api.MountRunReads(r)
+		s.api.MountEvalRunReads(r)
 		s.api.MountWorkerReads(r)
 	})
 	s.router.Group(func(r chi.Router) {
 		r.Use(worker)
 		s.api.MountRunWrites(r)
+		s.api.MountEvalRunWrites(r)
 		s.api.MountWorkerLifecycle(r)
 	})
 	s.router.Group(func(r chi.Router) {

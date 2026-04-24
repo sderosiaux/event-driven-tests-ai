@@ -1,7 +1,9 @@
 package main
 
 import (
+	cryptoRand "crypto/rand"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -120,6 +122,7 @@ func doEval(ctx context.Context, stdout, stderr io.Writer, f *evalFlags) error {
 	// events this iteration created. --iterations now controls sample count,
 	// not "first N events of a single seeding batch".
 	seedOnly := produceOnlyScenario(s)
+	startedAt := time.Now().UTC()
 	reseed := func(ctx context.Context) error {
 		if err := runner.Run(ctx, seedOnly); err != nil {
 			return fmt.Errorf("scenario seeding: %w", err)
@@ -130,6 +133,7 @@ func doEval(ctx context.Context, stdout, stderr io.Writer, f *evalFlags) error {
 		return err
 	}
 	results := exec.Finalize(s)
+	finishedAt := time.Now().UTC()
 	out := map[string]any{
 		"scenario": s.Metadata.Name,
 		"mode":     "eval",
@@ -140,7 +144,7 @@ func doEval(ctx context.Context, stdout, stderr io.Writer, f *evalFlags) error {
 
 	// Optional control-plane push.
 	if f.reportTo != "" {
-		if err := pushEvalReport(ctx, f, s, results, stderr); err != nil {
+		if err := pushEvalReport(ctx, f, s, results, startedAt, finishedAt, stderr); err != nil {
 			fmt.Fprintf(stderr, "eval: push report failed: %v\n", err)
 		}
 	}
@@ -169,16 +173,65 @@ func produceOnlyScenario(s *scenario.Scenario) *scenario.Scenario {
 	return &clone
 }
 
-func pushEvalReport(ctx context.Context, f *evalFlags, s *scenario.Scenario, results []eval.Result, stderr io.Writer) error {
+func pushEvalReport(ctx context.Context, f *evalFlags, s *scenario.Scenario, results []eval.Result, startedAt, finishedAt time.Time, stderr io.Writer) error {
 	client := reporter.New(f.reportTo, f.reportToken)
-	// Eval reports reuse the same Report type; we attach results under the
-	// generic Report.Error field as JSON text for M5. A dedicated eval_results
-	// wire shape arrives in a follow-up.
-	raw, _ := json.Marshal(map[string]any{
-		"mode":    "eval",
-		"results": results,
-	})
-	return client.PushReportRaw(ctx, s.Metadata.Name, raw)
+	req := reporter.EvalRunRequest{
+		ID:         evalRunID(startedAt),
+		Scenario:   s.Metadata.Name,
+		JudgeModel: resolveJudgeModel(s, f.model),
+		Iterations: f.iterations,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		Status:     summariseStatus(results),
+		Results:    make([]reporter.EvalResultWire, 0, len(results)),
+	}
+	for _, r := range results {
+		req.Results = append(req.Results, reporter.EvalResultWire{
+			Name:            r.Eval,
+			Aggregate:       r.Aggregate,
+			Samples:         r.Over,
+			RequiredSamples: r.RequiredOver,
+			Value:           r.Value,
+			Threshold:       r.Threshold,
+			Passed:          r.Passed,
+			Status:          r.Status,
+			Errors:          r.Errors,
+		})
+	}
+	return client.PushEvalRun(ctx, req)
+}
+
+// evalRunID mirrors the format in pkg/reporter.Client.PushReportRaw: a sortable
+// timestamp + 8 hex chars of entropy. Keeping the shape stable across the
+// transition so operators who indexed on it are not surprised.
+func evalRunID(t time.Time) string {
+	var b [4]byte
+	_, _ = cryptoRand.Read(b[:])
+	return "eval-" + t.UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
+}
+
+func resolveJudgeModel(s *scenario.Scenario, override string) string {
+	if override != "" {
+		return override
+	}
+	for _, ev := range s.Spec.Evals {
+		if ev.Judge != nil && ev.Judge.Model != "" {
+			return ev.Judge.Model
+		}
+	}
+	return ""
+}
+
+// summariseStatus rolls the per-eval statuses into a single run-level verdict:
+// any "fail" or errored eval → "fail"; otherwise "pass". Matches the runs.status
+// convention used elsewhere in the API.
+func summariseStatus(results []eval.Result) string {
+	for _, r := range results {
+		if !r.Passed {
+			return "fail"
+		}
+	}
+	return "pass"
 }
 
 func truncateCLI(s string, n int) string {

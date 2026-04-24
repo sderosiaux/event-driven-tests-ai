@@ -70,3 +70,32 @@ func TestPushReportEmptyBaseURL(t *testing.T) {
 type NoOp struct{}
 
 func (NoOp) Error() string { return "noop" }
+
+func TestPushEvalRunPostsToEvalRunsEndpoint(t *testing.T) {
+	var gotPath string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := reporter.New(srv.URL, "tok")
+	err := c.PushEvalRun(context.Background(), reporter.EvalRunRequest{
+		ID:         "eval-1",
+		Scenario:   "triage",
+		JudgeModel: "claude-opus-4-7",
+		Iterations: 50,
+		StartedAt:  time.Now().UTC(),
+		FinishedAt: time.Now().UTC(),
+		Status:     "pass",
+		Results: []reporter.EvalResultWire{
+			{Name: "correctness", Aggregate: "avg", Samples: 50, Value: 4.7, Threshold: ">= 4.2", Passed: true, Status: "pass"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/api/v1/eval-runs", gotPath)
+	assert.Contains(t, string(gotBody), `"id":"eval-1"`)
+	assert.Contains(t, string(gotBody), `"judge_model":"claude-opus-4-7"`)
+}

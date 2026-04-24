@@ -122,3 +122,73 @@ func TestWorkerLifecycle(t *testing.T) {
 	assert.ErrorIs(t, s.AssignScenario(ctx, "ghost", "demo"), storage.ErrNotFound)
 	assert.ErrorIs(t, s.AssignScenario(ctx, w.ID, "ghost"), storage.ErrNotFound)
 }
+
+func TestRecordEvalRunRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := storage.NewMemStore()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	run := storage.EvalRun{
+		ID:         "eval-20260424T150000-abcd",
+		Scenario:   "triage",
+		JudgeModel: "claude-opus-4-7",
+		Iterations: 50,
+		StartedAt:  now.Add(-time.Minute),
+		FinishedAt: now,
+		Status:     "pass",
+	}
+	rows := []storage.EvalResult{
+		{Name: "correctness", Aggregate: "avg", Samples: 50, Value: 4.7, Threshold: ">= 4.2", Passed: true, Status: "pass"},
+		{Name: "polite", Aggregate: "avg", Samples: 50, Value: 4.1, Threshold: ">= 4.2", Passed: false, Status: "fail"},
+	}
+	require.NoError(t, s.RecordEvalRun(ctx, run, rows))
+
+	got, gotRows, err := s.GetEvalRun(ctx, run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, run.Scenario, got.Scenario)
+	require.Len(t, gotRows, 2)
+	for _, r := range gotRows {
+		assert.Equal(t, run.ID, r.RunID, "storage must stamp RunID on fan-out rows")
+	}
+}
+
+func TestListEvalRunsMostRecentFirst(t *testing.T) {
+	ctx := context.Background()
+	s := storage.NewMemStore()
+	base := time.Now().UTC()
+	for i, name := range []string{"a", "b", "a"} {
+		require.NoError(t, s.RecordEvalRun(ctx, storage.EvalRun{
+			ID:         "eval-" + name + "-" + string(rune('0'+i)),
+			Scenario:   name,
+			StartedAt:  base.Add(time.Duration(i) * time.Second),
+			FinishedAt: base.Add(time.Duration(i) * time.Second),
+			Status:     "pass",
+		}, nil))
+	}
+
+	all, err := s.ListEvalRuns(ctx, "", 10)
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+	assert.True(t, all[0].StartedAt.After(all[1].StartedAt) || all[0].StartedAt.Equal(all[1].StartedAt))
+
+	onlyA, err := s.ListEvalRuns(ctx, "a", 10)
+	require.NoError(t, err)
+	assert.Len(t, onlyA, 2)
+	for _, r := range onlyA {
+		assert.Equal(t, "a", r.Scenario)
+	}
+}
+
+func TestRecordEvalRunRejectsEmptyIDOrScenario(t *testing.T) {
+	ctx := context.Background()
+	s := storage.NewMemStore()
+	require.Error(t, s.RecordEvalRun(ctx, storage.EvalRun{Scenario: "x"}, nil))
+	require.Error(t, s.RecordEvalRun(ctx, storage.EvalRun{ID: "y"}, nil))
+}
+
+func TestGetEvalRunMissing(t *testing.T) {
+	ctx := context.Background()
+	s := storage.NewMemStore()
+	_, _, err := s.GetEvalRun(ctx, "missing")
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}

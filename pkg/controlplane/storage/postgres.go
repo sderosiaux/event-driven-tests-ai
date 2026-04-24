@@ -292,6 +292,113 @@ func (s *PGStore) SLOPassRate(ctx context.Context, scenario string, window time.
 	return out, rows.Err()
 }
 
+// ---- eval runs -------------------------------------------------------------
+
+func (s *PGStore) RecordEvalRun(ctx context.Context, r EvalRun, results []EvalResult) error {
+	if r.ID == "" {
+		return fmt.Errorf("storage: eval run ID is required")
+	}
+	if r.Scenario == "" {
+		return fmt.Errorf("storage: eval run scenario is required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+        INSERT INTO eval_runs (id, scenario, judge_model, iterations, started_at, finished_at, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (id) DO UPDATE
+            SET scenario    = EXCLUDED.scenario,
+                judge_model = EXCLUDED.judge_model,
+                iterations  = EXCLUDED.iterations,
+                started_at  = EXCLUDED.started_at,
+                finished_at = EXCLUDED.finished_at,
+                status      = EXCLUDED.status
+    `, r.ID, r.Scenario, r.JudgeModel, r.Iterations, r.StartedAt, r.FinishedAt, r.Status); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM eval_results WHERE run_id = $1`, r.ID); err != nil {
+		return err
+	}
+	for _, res := range results {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO eval_results (run_id, name, aggregate, samples, required_samples, value, threshold, passed, status, errors)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `, r.ID, res.Name, res.Aggregate, res.Samples, res.RequiredSamples, res.Value, res.Threshold, res.Passed, res.Status, res.Errors); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PGStore) GetEvalRun(ctx context.Context, id string) (EvalRun, []EvalResult, error) {
+	var r EvalRun
+	err := s.pool.QueryRow(ctx, `
+        SELECT id, scenario, judge_model, iterations, started_at, finished_at, status
+        FROM eval_runs WHERE id = $1
+    `, id).Scan(&r.ID, &r.Scenario, &r.JudgeModel, &r.Iterations, &r.StartedAt, &r.FinishedAt, &r.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EvalRun{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return EvalRun{}, nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+        SELECT name, aggregate, samples, required_samples, value, threshold, passed, status, errors
+        FROM eval_results WHERE run_id = $1 ORDER BY name
+    `, id)
+	if err != nil {
+		return r, nil, err
+	}
+	defer rows.Close()
+	var out []EvalResult
+	for rows.Next() {
+		var res EvalResult
+		res.RunID = id
+		if err := rows.Scan(&res.Name, &res.Aggregate, &res.Samples, &res.RequiredSamples, &res.Value, &res.Threshold, &res.Passed, &res.Status, &res.Errors); err != nil {
+			return r, nil, err
+		}
+		out = append(out, res)
+	}
+	return r, out, rows.Err()
+}
+
+func (s *PGStore) ListEvalRuns(ctx context.Context, scenario string, limit int) ([]EvalRun, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if scenario == "" {
+		rows, err = s.pool.Query(ctx, `
+            SELECT id, scenario, judge_model, iterations, started_at, finished_at, status
+            FROM eval_runs ORDER BY started_at DESC LIMIT $1
+        `, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, `
+            SELECT id, scenario, judge_model, iterations, started_at, finished_at, status
+            FROM eval_runs WHERE scenario = $1 ORDER BY started_at DESC LIMIT $2
+        `, scenario, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EvalRun
+	for rows.Next() {
+		var r EvalRun
+		if err := rows.Scan(&r.ID, &r.Scenario, &r.JudgeModel, &r.Iterations, &r.StartedAt, &r.FinishedAt, &r.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ---- workers ---------------------------------------------------------------
 
 func (s *PGStore) RegisterWorker(ctx context.Context, labels map[string]string, version string) (Worker, error) {

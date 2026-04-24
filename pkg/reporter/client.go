@@ -35,23 +35,41 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-// PushReportRaw POSTs a pre-encoded eval payload to /api/v1/runs. The
-// control-plane ingest is permissive: any JSON with scenario + run_id is
-// accepted, so eval results can ride the same endpoint while a dedicated wire
-// shape matures.
-func (c *Client) PushReportRaw(ctx context.Context, scenarioName string, body []byte) error {
-	payload, err := json.Marshal(map[string]any{
-		"scenario": scenarioName,
-		"run_id":   "eval-" + time.Now().UTC().Format("20060102T150405"),
-		"mode":     "eval",
-		"started_at": time.Now().UTC(),
-		"finished_at": time.Now().UTC(),
-		"raw":      string(body),
-	})
+// EvalRunRequest mirrors api.evalRunRequest on the write side. Ship it to
+// PushEvalRun to persist an `edt eval` report as a first-class row in the
+// eval_runs + eval_results tables.
+type EvalRunRequest struct {
+	ID         string            `json:"id"`
+	Scenario   string            `json:"scenario"`
+	JudgeModel string            `json:"judge_model,omitempty"`
+	Iterations int               `json:"iterations,omitempty"`
+	StartedAt  time.Time         `json:"started_at"`
+	FinishedAt time.Time         `json:"finished_at"`
+	Status     string            `json:"status"`
+	Results    []EvalResultWire  `json:"results"`
+}
+
+// EvalResultWire is the per-eval row inside an EvalRunRequest. Mirrors the
+// storage.EvalResult shape on the wire.
+type EvalResultWire struct {
+	Name            string  `json:"name"`
+	Aggregate       string  `json:"aggregate,omitempty"`
+	Samples         int     `json:"samples"`
+	RequiredSamples int     `json:"required_samples,omitempty"`
+	Value           float64 `json:"value"`
+	Threshold       string  `json:"threshold,omitempty"`
+	Passed          bool    `json:"passed"`
+	Status          string  `json:"status"`
+	Errors          int     `json:"errors,omitempty"`
+}
+
+// PushEvalRun POSTs a typed eval report to /api/v1/eval-runs.
+func (c *Client) PushEvalRun(ctx context.Context, req EvalRunRequest) error {
+	body, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("reporter: marshal eval-run: %w", err)
 	}
-	return c.post(ctx, "/api/v1/runs", payload)
+	return c.post(ctx, "/api/v1/eval-runs", body)
 }
 
 func (c *Client) post(ctx context.Context, path string, body []byte) error {

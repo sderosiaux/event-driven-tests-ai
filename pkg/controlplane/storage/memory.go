@@ -22,6 +22,8 @@ type MemStore struct {
 	tokens      map[string]Token             // sha256(plaintext) → token
 	tokensByID  map[string]string            // id → sha256(plaintext) (for revoke)
 	samples     []CheckSample                // append-only; scanned linearly by scenario+since
+	evalRuns    map[string]EvalRun           // id → run
+	evalResults map[string][]EvalResult      // run_id → results
 	now         func() time.Time             // overridable for tests
 }
 
@@ -34,6 +36,8 @@ func NewMemStore() *MemStore {
 		assignments: make(map[string][]Assignment),
 		tokens:      make(map[string]Token),
 		tokensByID:  make(map[string]string),
+		evalRuns:    make(map[string]EvalRun),
+		evalResults: make(map[string][]EvalResult),
 		now:         func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -163,6 +167,55 @@ func (s *MemStore) SLOPassRate(_ context.Context, scenario string, window time.D
 			continue
 		}
 		out[k] = float64(a.pass) / float64(a.total)
+	}
+	return out, nil
+}
+
+// ---- eval runs -------------------------------------------------------------
+
+func (s *MemStore) RecordEvalRun(_ context.Context, r EvalRun, results []EvalResult) error {
+	if r.ID == "" {
+		return fmt.Errorf("storage: eval run ID is required")
+	}
+	if r.Scenario == "" {
+		return fmt.Errorf("storage: eval run scenario is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.evalRuns[r.ID] = r
+	rows := make([]EvalResult, len(results))
+	copy(rows, results)
+	for i := range rows {
+		rows[i].RunID = r.ID
+	}
+	s.evalResults[r.ID] = rows
+	return nil
+}
+
+func (s *MemStore) GetEvalRun(_ context.Context, id string) (EvalRun, []EvalResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.evalRuns[id]
+	if !ok {
+		return EvalRun{}, nil, ErrNotFound
+	}
+	rows := append([]EvalResult(nil), s.evalResults[id]...)
+	return r, rows, nil
+}
+
+func (s *MemStore) ListEvalRuns(_ context.Context, scenario string, limit int) ([]EvalRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]EvalRun, 0, len(s.evalRuns))
+	for _, r := range s.evalRuns {
+		if scenario != "" && r.Scenario != scenario {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

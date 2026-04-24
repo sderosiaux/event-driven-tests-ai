@@ -50,6 +50,31 @@ type Run struct {
 	Report     []byte // JSON-encoded report.Report
 }
 
+// EvalRun is the persisted shape of one `edt eval` invocation.
+type EvalRun struct {
+	ID         string
+	Scenario   string
+	JudgeModel string
+	Iterations int
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Status     string // pass | fail | error
+}
+
+// EvalResult is one row of the eval_results fan-out — one per eval name.
+type EvalResult struct {
+	RunID           string
+	Name            string
+	Aggregate       string
+	Samples         int
+	RequiredSamples int
+	Value           float64
+	Threshold       string
+	Passed          bool
+	Status          string // pass | fail | insufficient_samples | judge_errors
+	Errors          int
+}
+
 // CheckResult is the per-check row used to power SLO queries.
 type CheckResult struct {
 	RunID    string
@@ -111,6 +136,11 @@ type Storage interface {
 	RecordRun(ctx context.Context, r Run, checks []CheckResult) error
 	GetRun(ctx context.Context, id string) (Run, []CheckResult, error)
 	ListRuns(ctx context.Context, scenario string, limit int) ([]Run, error)
+
+	// Eval runs
+	RecordEvalRun(ctx context.Context, r EvalRun, results []EvalResult) error
+	GetEvalRun(ctx context.Context, id string) (EvalRun, []EvalResult, error)
+	ListEvalRuns(ctx context.Context, scenario string, limit int) ([]EvalRun, error)
 
 	// SLO
 	SLOPassRate(ctx context.Context, scenario string, window time.Duration) (map[string]float64, error)
