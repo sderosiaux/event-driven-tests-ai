@@ -6,3 +6,4 @@ dist/
 coverage.out
 *.out
 .DS_Store
+node_modules/
