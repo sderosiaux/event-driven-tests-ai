@@ -45,14 +45,14 @@ func TestInitializeReportsCapabilities(t *testing.T) {
 	assert.NotNil(t, result["capabilities"].(map[string]any)["tools"])
 }
 
-func TestToolsListReturnsSixTools(t *testing.T) {
+func TestToolsListReturnsEightTools(t *testing.T) {
 	srv, _ := newMCP(t)
 	got := call(t, srv.URL, map[string]any{
 		"jsonrpc": "2.0", "id": 2, "method": "tools/list",
 	})
 	result := got["result"].(map[string]any)
 	tools := result["tools"].([]any)
-	assert.Len(t, tools, 6)
+	assert.Len(t, tools, 8, "6 read tools + upsert_scenario + assign_scenario")
 	names := map[string]bool{}
 	for _, tool := range tools {
 		names[tool.(map[string]any)["name"].(string)] = true
@@ -108,17 +108,26 @@ func TestToolsCallSuccessIncludesIsErrorFalse(t *testing.T) {
 }
 
 // Codex P1 #12: tool descriptors must carry annotations so clients can reason
-// about safety without reading the description.
-func TestToolsListCarriesReadOnlyAnnotations(t *testing.T) {
+// about safety without reading the description. Read tools stay readOnly;
+// write tools flip destructiveHint so MCP clients render an approval prompt.
+func TestToolsListAnnotationsMatchToolClass(t *testing.T) {
 	srv, _ := newMCP(t)
 	got := call(t, srv.URL, map[string]any{
 		"jsonrpc": "2.0", "id": 21, "method": "tools/list",
 	})
 	tools := got["result"].(map[string]any)["tools"].([]any)
+	writeTools := map[string]bool{"upsert_scenario": true, "assign_scenario": true}
 	for _, tool := range tools {
-		annotations := tool.(map[string]any)["annotations"].(map[string]any)
-		assert.Equal(t, true, annotations["readOnlyHint"], "tool=%v", tool.(map[string]any)["name"])
-		assert.Equal(t, false, annotations["destructiveHint"])
+		m := tool.(map[string]any)
+		name := m["name"].(string)
+		annotations := m["annotations"].(map[string]any)
+		if writeTools[name] {
+			assert.Equal(t, false, annotations["readOnlyHint"], "write tool %s must not claim readOnly", name)
+			assert.Equal(t, true, annotations["destructiveHint"], "write tool %s must set destructiveHint", name)
+			continue
+		}
+		assert.Equal(t, true, annotations["readOnlyHint"], "read tool %s must claim readOnly", name)
+		assert.Equal(t, false, annotations["destructiveHint"], "read tool %s must not claim destructive", name)
 	}
 }
 
@@ -184,4 +193,109 @@ func TestGETMethodRejected(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	errObj := out["error"].(map[string]any)
 	assert.Equal(t, float64(-32600), errObj["code"])
+}
+
+// newMCPWithPolicy exposes the WithWritePolicy hook so tests can flip the
+// default deny-all behaviour without rebuilding the whole test harness.
+func newMCPWithPolicy(t *testing.T, allow bool) (*httptest.Server, storage.Storage) {
+	t.Helper()
+	s := storage.NewMemStore()
+	srv := mcp.New(s)
+	if allow {
+		srv = srv.WithWritePolicy(func(context.Context, string) error { return nil })
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts, s
+}
+
+func TestToolsListNowAdvertisesWriteTools(t *testing.T) {
+	srv, _ := newMCP(t)
+	got := call(t, srv.URL, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+	})
+	result := got["result"].(map[string]any)
+	tools := result["tools"].([]any)
+	names := map[string]bool{}
+	for _, tRaw := range tools {
+		names[tRaw.(map[string]any)["name"].(string)] = true
+	}
+	assert.True(t, names["upsert_scenario"])
+	assert.True(t, names["assign_scenario"])
+}
+
+func TestWriteToolsDeniedByDefault(t *testing.T) {
+	srv, store := newMCP(t)
+	got := call(t, srv.URL, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "upsert_scenario",
+			"arguments": map[string]any{"name": "blocked", "yaml": "hello"},
+		},
+	})
+	errObj, ok := got["error"].(map[string]any)
+	require.True(t, ok, "write must be denied, but got no error")
+	assert.Equal(t, float64(-32604), errObj["code"])
+	// Storage must be untouched.
+	_, err := store.GetScenario(context.Background(), "blocked")
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestWriteToolsUpsertScenarioHappyPath(t *testing.T) {
+	srv, store := newMCP(t)
+	// Rebuild with an allow-all policy.
+	srv.Close()
+	srv, store = newMCPWithPolicy(t, true)
+
+	got := call(t, srv.URL, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name": "upsert_scenario",
+			"arguments": map[string]any{
+				"name":   "from-mcp",
+				"yaml":   "apiVersion: edt.io/v1\nkind: Scenario\nmetadata:\n  name: from-mcp\nspec:\n  connectors: {}\n  steps: []\n",
+				"labels": map[string]any{"source": "agent"},
+			},
+		},
+	})
+	require.Nil(t, got["error"], "error: %v", got["error"])
+	// Persisted?
+	scn, err := store.GetScenario(context.Background(), "from-mcp")
+	require.NoError(t, err)
+	assert.Equal(t, "agent", scn.Labels["source"])
+}
+
+func TestWriteToolsUpsertValidatesRequiredFields(t *testing.T) {
+	srv, _ := newMCPWithPolicy(t, true)
+	got := call(t, srv.URL, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "upsert_scenario",
+			"arguments": map[string]any{"name": ""},
+		},
+	})
+	errObj := got["error"].(map[string]any)
+	assert.Contains(t, errObj["message"], "name and yaml are required")
+}
+
+func TestWriteToolsAssignScenario(t *testing.T) {
+	srv, store := newMCPWithPolicy(t, true)
+	// Seed scenario + worker so the assignment succeeds.
+	_, err := store.UpsertScenario(context.Background(), "demo", []byte("x"), nil)
+	require.NoError(t, err)
+	w, err := store.RegisterWorker(context.Background(), map[string]string{}, "test")
+	require.NoError(t, err)
+
+	got := call(t, srv.URL, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "assign_scenario",
+			"arguments": map[string]any{"worker_id": w.ID, "scenario_name": "demo"},
+		},
+	})
+	require.Nil(t, got["error"])
+	assigns, err := store.ListAssignments(context.Background(), w.ID)
+	require.NoError(t, err)
+	require.Len(t, assigns, 1)
+	assert.Equal(t, "demo", assigns[0].ScenarioName)
 }

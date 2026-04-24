@@ -155,9 +155,12 @@ func (s *Server) routes() {
 		s.api.MountTokens(r)
 	})
 
-	// MCP server: JSON-RPC over POST /mcp. Gated as viewer — listing and
-	// reading state, never writing.
-	mcpServer := mcp.New(s.store)
+	// MCP server: JSON-RPC over POST /mcp. Read tools are gated as viewer;
+	// write tools consult the MCP WritePolicy, which requires RoleEditor+
+	// in auth-enabled mode and denies everything when auth is disabled.
+	// This keeps the MCP endpoint safe-by-default even when operators
+	// forget to reverse-proxy it.
+	mcpServer := mcp.New(s.store).WithWritePolicy(s.mcpWritePolicy())
 	s.router.Group(func(r chi.Router) {
 		r.Use(viewer)
 		r.Method(http.MethodPost, "/mcp", mcpServer.Handler())
@@ -169,6 +172,21 @@ func (s *Server) routes() {
 	s.router.Get("/", s.serveIndex)
 	s.router.Get("/ui/runs", s.serveIndex)
 	s.router.Get("/ui/workers", s.serveIndex)
+}
+
+// mcpWritePolicy returns a WritePolicy that permits mutating tools only for
+// callers the auth middleware promoted to RoleEditor or RoleAdmin. When auth
+// is disabled (dev mode), the policy denies writes outright — operators who
+// want LLM agents to mutate state must enable auth and issue an editor token
+// so the blast radius is explicit rather than incidental.
+func (s *Server) mcpWritePolicy() mcp.WritePolicy {
+	return func(ctx context.Context, tool string) error {
+		role := api.RoleFromContext(ctx)
+		if role == storage.RoleEditor || role == storage.RoleAdmin {
+			return nil
+		}
+		return mcp.DenyAllWrites(ctx, tool)
+	}
 }
 
 // maybeRequire returns a no-op middleware when auth is disabled, otherwise

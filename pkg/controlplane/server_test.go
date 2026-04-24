@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,4 +109,56 @@ func TestUnknownRouteReturns404(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, 404, resp.StatusCode)
+}
+
+// M6-T6: the MCP write policy integrates with the HTTP auth middleware. An
+// editor-role bearer must be permitted to call upsert_scenario; a viewer
+// bearer must be rejected with the policy error code.
+func TestMCPWritePolicyGatesOnHTTPRole(t *testing.T) {
+	s := controlplane.NewServer(controlplane.Config{
+		RequireAuth: true,
+		AdminToken:  "admin-bootstrap-secret",
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	mintToken := func(role string) string {
+		payload := `{"role":"` + role + `","note":"mcp-test"}`
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/tokens", strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer admin-bootstrap-secret")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, 201, resp.StatusCode)
+		var out map[string]string
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		return out["plaintext"]
+	}
+	editor := mintToken("editor")
+	viewer := mintToken("viewer")
+
+	scenarioYAML := "apiVersion: edt.io/v1\nkind: Scenario\nmetadata:\n  name: via-mcp\nspec:\n  connectors: {}\n  steps: []\n"
+	mcpBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upsert_scenario","arguments":{"name":"via-mcp","yaml":` +
+		strconv.Quote(scenarioYAML) + `}}}`
+
+	callMCP := func(tok string) map[string]any {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", strings.NewReader(mcpBody))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		var out map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		return out
+	}
+
+	viewerResp := callMCP(viewer)
+	errObj, ok := viewerResp["error"].(map[string]any)
+	require.True(t, ok, "viewer must be denied")
+	assert.Equal(t, float64(-32604), errObj["code"], "policy-denied code expected")
+
+	editorResp := callMCP(editor)
+	assert.Nil(t, editorResp["error"], "editor write must succeed, got: %v", editorResp["error"])
 }

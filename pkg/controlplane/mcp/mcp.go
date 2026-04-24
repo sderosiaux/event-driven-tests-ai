@@ -24,6 +24,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -57,12 +58,43 @@ type rpcError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-// Server wraps a Storage and exposes MCP-compliant JSON-RPC over HTTP.
-type Server struct {
-	store storage.Storage
+// WritePolicy decides whether a mutating tool may run for the caller.
+// The context carries whatever role the auth middleware stored; policies
+// typically require RoleEditor+ for writes. Return nil to allow, non-nil to
+// deny (the error message reaches the MCP client verbatim).
+type WritePolicy func(ctx context.Context, toolName string) error
+
+// DenyAllWrites is the safe default: no mutating tool is permitted.
+func DenyAllWrites(_ context.Context, tool string) error {
+	return &policyError{message: "writes disabled: tool " + tool + " requires a WritePolicy that permits it"}
 }
 
-func New(store storage.Storage) *Server { return &Server{store: store} }
+type policyError struct{ message string }
+
+func (e *policyError) Error() string { return e.message }
+
+// Server wraps a Storage and exposes MCP-compliant JSON-RPC over HTTP.
+type Server struct {
+	store       storage.Storage
+	writePolicy WritePolicy
+}
+
+// New returns a read-only MCP server. Writes are denied by default;
+// call WithWritePolicy to allow specific writes based on the caller's role.
+func New(store storage.Storage) *Server {
+	return &Server{store: store, writePolicy: DenyAllWrites}
+}
+
+// WithWritePolicy swaps in a caller-supplied policy. Production wiring lives
+// in pkg/controlplane/server.go, which reads api.RoleFromContext to require
+// RoleEditor+ on mutating tools.
+func (s *Server) WithWritePolicy(p WritePolicy) *Server {
+	if p == nil {
+		p = DenyAllWrites
+	}
+	s.writePolicy = p
+	return s
+}
 
 // Handler returns the HTTP handler to mount at /mcp. Accepts either a single
 // JSON-RPC request object or a batch array (MCP 2025-03-26 transport). Requests
@@ -173,13 +205,19 @@ func (s *Server) dispatch(r *http.Request, req rpcRequest) rpcResponse {
 
 // toolDescriptors is the static manifest clients discover through tools/list.
 // Every tool carries the 2025-03-26 annotations so MCP clients (Claude Code,
-// Cursor, Desktop) can reason about safety: readOnlyHint=true marks us as
-// non-mutating; destructiveHint=false rules out side effects.
+// Cursor, Desktop) can reason about safety. Read tools mark themselves
+// readOnlyHint=true; write tools flip destructiveHint to surface the risk.
 func toolDescriptors() []map[string]any {
 	readOnly := map[string]any{
 		"readOnlyHint":    true,
 		"destructiveHint": false,
 		"idempotentHint":  true,
+		"openWorldHint":   false,
+	}
+	write := map[string]any{
+		"readOnlyHint":    false,
+		"destructiveHint": true,
+		"idempotentHint":  true, // upsert + assign are naturally idempotent on (name, worker, scenario)
 		"openWorldHint":   false,
 	}
 	return []map[string]any{
@@ -244,6 +282,33 @@ func toolDescriptors() []map[string]any {
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 			"annotations": readOnly,
 		},
+		{
+			"name":        "upsert_scenario",
+			"description": "Create or update a scenario. Requires editor role. Body is the full YAML document.",
+			"inputSchema": map[string]any{
+				"type":     "object",
+				"required": []string{"name", "yaml"},
+				"properties": map[string]any{
+					"name":   map[string]any{"type": "string"},
+					"yaml":   map[string]any{"type": "string", "description": "Canonical scenario YAML"},
+					"labels": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+				},
+			},
+			"annotations": write,
+		},
+		{
+			"name":        "assign_scenario",
+			"description": "Assign a scenario to a worker for watch-mode execution. Requires editor role.",
+			"inputSchema": map[string]any{
+				"type":     "object",
+				"required": []string{"worker_id", "scenario_name"},
+				"properties": map[string]any{
+					"worker_id":     map[string]any{"type": "string"},
+					"scenario_name": map[string]any{"type": "string"},
+				},
+			},
+			"annotations": write,
+		},
 	}
 }
 
@@ -259,6 +324,16 @@ func (s *Server) toolsCall(r *http.Request, req rpcRequest) rpcResponse {
 	}
 	out, err := s.invoke(r, p)
 	if err != nil {
+		// Policy-denied writes get -32604 (MCP tool-forbidden): a client can
+		// recognise the code without parsing the message.
+		var polErr *policyError
+		if errors.As(err, &polErr) {
+			return rpcResponse{ID: req.ID, Error: &rpcError{
+				Code:    -32604,
+				Message: err.Error(),
+				Data:    map[string]any{"tool": p.Name},
+			}}
+		}
 		// Missing resources get the MCP-conventional -32002 with the tool name
 		// and arguments echoed in `data` so clients can present a helpful
 		// message without a second probe.
@@ -330,6 +405,40 @@ func (s *Server) invoke(r *http.Request, p toolsCallParams) (any, error) {
 		return map[string]any{"scenario": args.Name, "window": window.String(), "pass_rates": rates}, nil
 	case "list_workers":
 		return s.store.ListWorkers(ctx)
+	case "upsert_scenario":
+		if err := s.writePolicy(ctx, p.Name); err != nil {
+			return nil, err
+		}
+		var args struct {
+			Name   string            `json:"name"`
+			YAML   string            `json:"yaml"`
+			Labels map[string]string `json:"labels"`
+		}
+		if err := json.Unmarshal(p.Arguments, &args); err != nil {
+			return nil, err
+		}
+		if args.Name == "" || args.YAML == "" {
+			return nil, errors.New("upsert_scenario: name and yaml are required")
+		}
+		return s.store.UpsertScenario(ctx, args.Name, []byte(args.YAML), args.Labels)
+	case "assign_scenario":
+		if err := s.writePolicy(ctx, p.Name); err != nil {
+			return nil, err
+		}
+		var args struct {
+			WorkerID     string `json:"worker_id"`
+			ScenarioName string `json:"scenario_name"`
+		}
+		if err := json.Unmarshal(p.Arguments, &args); err != nil {
+			return nil, err
+		}
+		if args.WorkerID == "" || args.ScenarioName == "" {
+			return nil, errors.New("assign_scenario: worker_id and scenario_name are required")
+		}
+		if err := s.store.AssignScenario(ctx, args.WorkerID, args.ScenarioName); err != nil {
+			return nil, err
+		}
+		return map[string]any{"worker_id": args.WorkerID, "scenario": args.ScenarioName, "assigned": true}, nil
 	}
 	return nil, errUnknownTool(p.Name)
 }
