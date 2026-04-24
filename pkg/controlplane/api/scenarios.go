@@ -13,17 +13,26 @@ import (
 
 // scenarioResponse is the wire shape returned to API clients.
 type scenarioResponse struct {
-	Name      string            `json:"name"`
-	Version   int               `json:"version"`
-	YAML      string            `json:"yaml"`
-	Labels    map[string]string `json:"labels,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	Name      string             `json:"name"`
+	Version   int                `json:"version"`
+	YAML      string             `json:"yaml"`
+	Parsed    *scenario.Scenario `json:"parsed,omitempty"`
+	Labels    map[string]string  `json:"labels,omitempty"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 func toScenarioResponse(s storage.Scenario) scenarioResponse {
+	// Parse on read so clients (notably the UI builder) don't re-implement
+	// a YAML parser in JS. Parse errors silently drop the parsed field —
+	// the raw YAML is still available.
+	var parsed *scenario.Scenario
+	if p, err := scenario.Parse(s.YAML); err == nil {
+		parsed = p
+	}
 	return scenarioResponse{
 		Name: s.Name, Version: s.Version, YAML: string(s.YAML),
+		Parsed: parsed,
 		Labels: s.Labels, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt,
 	}
 }

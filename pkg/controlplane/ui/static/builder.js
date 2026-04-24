@@ -21,6 +21,9 @@ const DEFAULT_STATE = {
     websocket: { base_url: '' },
     grpc: { address: '' },
   },
+  // Data generators keyed by alias, carried through import/export so
+  // scenarios that reference ${data.X} in their payloads keep working.
+  data: {},
   steps: [],
   checks: [],
   lastReport: null,
@@ -130,6 +133,9 @@ function toWireShape(s) {
   if (s.connectors.http.base_url)           out.spec.connectors.http  = { base_url: s.connectors.http.base_url };
   if (s.connectors.websocket.base_url)      out.spec.connectors.websocket = { base_url: s.connectors.websocket.base_url };
   if (s.connectors.grpc.address)            out.spec.connectors.grpc  = { address: s.connectors.grpc.address };
+  // Carry data generators through — if the imported scenario had them we
+  // preserve the exact shape so ${data.alias} references still resolve.
+  if (s.data && Object.keys(s.data).length) out.spec.data = s.data;
   out.spec.steps = orderedSteps(s).map(stepToWire);
   if (s.checks.length) out.spec.checks = s.checks.map(c => ({ name: c.name, expr: c.expr, ...(c.severity ? { severity: c.severity } : {}) }));
   return out;
@@ -668,23 +674,106 @@ function escapeHTML(s) {
 }
 
 // ----- Boot ----------------------------------------------------------------
+//
+// Two boot modes:
+//  1. No ?scenario= → pre-populate with a runnable demo scenario so the
+//     user's first view isn't an empty canvas.
+//  2. ?scenario=X → fetch the stored scenario + its parsed struct from the
+//     API and hydrate the builder state. Users coming from the Scenarios
+//     list land directly in the editor with diagram + YAML + metadata
+//     already rendered.
 
-state.name = 'user-demo';
-state.connectors.kafka.bootstrap_servers = 'localhost:19092';
-state.connectors.http.base_url = 'http://localhost:18082';
+function seedDefaultDemo() {
+  state.name = 'user-demo';
+  state.connectors.kafka.bootstrap_servers = 'localhost:19092';
+  state.connectors.http.base_url = 'http://localhost:18082';
+  state.steps = [
+    Object.assign(TEMPLATES.produce({ x: LANE_STEPS, y: 40 }),                 { topic: 'user-demo-orders', payload: '${data.orders}', count: 25, name: 'place-orders' }),
+    Object.assign(TEMPLATES.consume({ x: LANE_STEPS, y: 40 + ROW_STEP }),      { topic: 'user-demo-orders', group: 'edt-builder', match: 'payload.amount >= 0', name: 'consume-back' }),
+    Object.assign(TEMPLATES.http   ({ x: LANE_STEPS, y: 40 + ROW_STEP * 2 }),  { method: 'GET',  path: '/status/200', name: 'gateway-healthz' }),
+    Object.assign(TEMPLATES.http   ({ x: LANE_STEPS, y: 40 + ROW_STEP * 3 }),  { name: 'post-to-httpbin', method: 'POST', path: '/anything', body: '{"scenario":"user-demo"}' }),
+  ];
+  state.checks = [
+    { id: nextId(), name: 'produced_orders', expr: "size(stream('user-demo-orders')) >= 25", severity: 'critical', x: LANE_CHECKS, y: 40 },
+    { id: nextId(), name: 'httpbin_healthy', expr: "size(stream('http:/status/200')) >= 1",  severity: 'critical', x: LANE_CHECKS, y: 40 + ROW_STEP * 2 },
+  ];
+}
 
-// Default demo layout: a single vertical chain of steps in the left lane,
-// with checks aligned in a parallel lane to the right. Arrows flow straight
-// down; no overlap, no crossings.
-state.steps = [
-  Object.assign(TEMPLATES.produce({ x: LANE_STEPS, y: 40  }),      { topic: 'user-demo-orders', payload: '${data.orders}', count: 25, name: 'place-orders' }),
-  Object.assign(TEMPLATES.consume({ x: LANE_STEPS, y: 40 + ROW_STEP }),     { topic: 'user-demo-orders', group: 'edt-builder', match: 'payload.amount >= 0', name: 'consume-back' }),
-  Object.assign(TEMPLATES.http   ({ x: LANE_STEPS, y: 40 + ROW_STEP * 2 }), { method: 'GET', path: '/status/200', name: 'gateway-healthz' }),
-  Object.assign(TEMPLATES.http   ({ x: LANE_STEPS, y: 40 + ROW_STEP * 3 }), { name: 'post-to-httpbin', method: 'POST', path: '/anything', body: '{"scenario":"user-demo"}' }),
-];
-state.checks = [
-  { id: nextId(), name: 'produced_orders', expr: "size(stream('user-demo-orders')) >= 25", severity: 'critical', x: LANE_CHECKS, y: 40 },
-  { id: nextId(), name: 'httpbin_healthy', expr: "size(stream('http:/status/200')) >= 1",  severity: 'critical', x: LANE_CHECKS, y: 40 + ROW_STEP * 2 },
-];
+// Hydrate state from a parsed scenario coming from the API. Steps line up
+// vertically in the steps lane; checks align in a parallel lane so the
+// visual flow matches the execution order.
+function hydrateFromParsed(parsed, yamlBody) {
+  state.name = parsed?.metadata?.name || 'imported';
+  state.labels = { ...(parsed?.metadata?.labels || {}) };
+  const c = parsed?.spec?.connectors || {};
+  state.connectors = {
+    kafka:     { bootstrap_servers: c.kafka?.bootstrap_servers || '' },
+    http:      { base_url: c.http?.base_url || '' },
+    websocket: { base_url: c.websocket?.base_url || '' },
+    grpc:      { address:  c.grpc?.address || '' },
+  };
+  // Preserve data generators verbatim — steps reference them via ${data.X}
+  // and we don't have a UI for editing generator config yet.
+  state.data = { ...(parsed?.spec?.data || {}) };
+  state.steps = (parsed?.spec?.steps || []).map((s, i) => stepFromParsed(s, i));
+  state.checks = (parsed?.spec?.checks || []).map((c, i) => ({
+    id: nextId(),
+    name: c.name || `check-${i + 1}`,
+    expr: c.expr || '',
+    severity: c.severity || 'critical',
+    x: LANE_CHECKS,
+    y: 40 + i * ROW_STEP,
+  }));
+  state.lastReport = null;
+  // Stash the original YAML for fidelity — the emitter will re-emit from
+  // state, but users comparing "is this the same scenario?" will see the
+  // round-trip. (Not currently rendered; noted for future diff UI.)
+  state._sourceYAML = yamlBody;
+}
 
-render();
+function stepFromParsed(raw, i) {
+  const pos = { x: LANE_STEPS, y: 40 + i * ROW_STEP };
+  if (raw.produce)   return { ...TEMPLATES.produce(pos),   name: raw.name, topic: raw.produce.topic || '', payload: raw.produce.payload || '', count: raw.produce.count || 0, rate: raw.produce.rate || '' };
+  if (raw.consume)   return { ...TEMPLATES.consume(pos),   name: raw.name, topic: raw.consume.topic || '', group: raw.consume.group || '', timeout: raw.consume.timeout || '', match: (raw.consume.match || []).map(m => m.key).join('\n') };
+  if (raw.http)      return { ...TEMPLATES.http(pos),      name: raw.name, method: raw.http.method || 'GET', path: raw.http.path || '', body: raw.http.body || '', expectStatus: raw.http.expect?.status || '' };
+  if (raw.websocket) return { ...TEMPLATES.websocket(pos), name: raw.name, path: raw.websocket.path || '', send: raw.websocket.send || '', count: raw.websocket.count || 0, timeout: raw.websocket.timeout || '', match: (raw.websocket.match || []).map(m => m.key).join('\n') };
+  if (raw.sse)       return { ...TEMPLATES.sse(pos),       name: raw.name, path: raw.sse.path || '', count: raw.sse.count || 0, timeout: raw.sse.timeout || '', match: (raw.sse.match || []).map(m => m.key).join('\n') };
+  if (raw.grpc)      return { ...TEMPLATES.grpc(pos),      name: raw.name, proto: raw.grpc.proto || '', method: raw.grpc.method || '', request: raw.grpc.request || '{}', expectCode: raw.grpc.expect?.code ?? 0 };
+  if (raw.sleep)     return { ...TEMPLATES.sleep(pos),     name: raw.name, duration: raw.sleep };
+  return { ...TEMPLATES.sleep(pos), name: raw.name || `step-${i + 1}`, duration: '0s' };
+}
+
+async function boot() {
+  const params = new URLSearchParams(location.search);
+  const scenarioName = params.get('scenario');
+  if (!scenarioName) {
+    seedDefaultDemo();
+    render();
+    return;
+  }
+  try {
+    const scn = await fetchJSON('/api/v1/scenarios/' + encodeURIComponent(scenarioName));
+    if (scn.parsed) {
+      hydrateFromParsed(scn.parsed, scn.yaml);
+    } else {
+      // Fallback when the server couldn't parse (shouldn't happen given we
+      // only persist valid YAML) — seed empty state and surface the raw YAML.
+      state.name = scenarioName;
+      state.steps = [];
+      state.checks = [];
+      showToast('Loaded ' + scenarioName + ' (YAML only, parse failed)', 'err');
+    }
+  } catch (e) {
+    seedDefaultDemo();
+    showToast('Could not load ' + scenarioName + ': ' + e.message, 'err');
+  }
+  render();
+}
+
+async function fetchJSON(url) {
+  const r = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  return r.json();
+}
+
+boot();

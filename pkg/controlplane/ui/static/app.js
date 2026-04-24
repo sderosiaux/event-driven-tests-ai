@@ -32,7 +32,7 @@ const routes = {
   '/ui/workers': renderWorkers,
 };
 
-// Run detail is dynamic — matched by prefix in route().
+// Dynamic-prefix route matched in route() below.
 const RUN_DETAIL_PREFIX = '/ui/runs/';
 
 async function renderScenarios() {
@@ -40,14 +40,15 @@ async function renderScenarios() {
   if (!ss.length) {
     app.innerHTML = `<div class="empty">
       <h2>No scenarios yet</h2>
-      <p>POST a YAML scenario to <code>/api/v1/scenarios</code> to get started.</p>
+      <p>Open the <a href="/ui/builder">Builder</a> to create one visually, or POST a YAML to <code>/api/v1/scenarios</code>.</p>
     </div>`;
     return;
   }
-  app.innerHTML = `<table>
+  app.innerHTML = `<p class="muted" style="margin-bottom:12px">${ss.length} scenarios. Click any row to open it in the Builder.</p>
+    <table>
     <thead><tr><th>Name</th><th>Version</th><th>Labels</th><th>Updated</th></tr></thead>
     <tbody>
-    ${ss.map(s => `<tr>
+    ${ss.map(s => `<tr class="clickable" data-scenario="${escape(s.name)}" style="cursor:pointer">
       <td><strong>${escape(s.name)}</strong></td>
       <td>v${s.version}</td>
       <td class="muted">${labels(s.labels)}</td>
@@ -55,6 +56,15 @@ async function renderScenarios() {
     </tr>`).join('')}
     </tbody>
   </table>`;
+  // Click → open the scenario in the Builder. The builder reads the
+  // ?scenario=… query and hydrates its state from the parsed API response,
+  // so users get metadata + YAML + diagram + Run live in one place.
+  app.querySelectorAll('tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const name = tr.dataset.scenario;
+      location.href = '/ui/builder?scenario=' + encodeURIComponent(name);
+    });
+  });
 }
 
 async function renderRuns() {
@@ -191,8 +201,7 @@ async function route() {
   const path = location.pathname;
   try {
     if (path.startsWith(RUN_DETAIL_PREFIX) && path.length > RUN_DETAIL_PREFIX.length) {
-      const id = decodeURIComponent(path.slice(RUN_DETAIL_PREFIX.length));
-      await renderRunDetail(id);
+      await renderRunDetail(decodeURIComponent(path.slice(RUN_DETAIL_PREFIX.length)));
       return;
     }
     const handler = routes[path] || routes['/'];
