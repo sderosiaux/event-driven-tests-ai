@@ -62,8 +62,8 @@ dockers:
     goos: linux
     goarch: amd64
     image_templates:
-      - 'ghcr.io/event-driven-tests-ai/edt:{{ .Version }}-amd64'
-      - 'ghcr.io/event-driven-tests-ai/edt:latest-amd64'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:{{ .Version }}-amd64'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:latest-amd64'
     dockerfile: Dockerfile
     build_flag_templates:
       - --platform=linux/amd64
@@ -73,22 +73,22 @@ dockers:
     goos: linux
     goarch: arm64
     image_templates:
-      - 'ghcr.io/event-driven-tests-ai/edt:{{ .Version }}-arm64'
-      - 'ghcr.io/event-driven-tests-ai/edt:latest-arm64'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:{{ .Version }}-arm64'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:latest-arm64'
     dockerfile: Dockerfile
     build_flag_templates:
       - --platform=linux/arm64
       - --build-arg=VERSION={{ .Version }}
 
 docker_manifests:
-  - name_template: 'ghcr.io/event-driven-tests-ai/edt:{{ .Version }}'
+  - name_template: 'ghcr.io/sderosiaux/event-driven-tests-ai:{{ .Version }}'
     image_templates:
-      - 'ghcr.io/event-driven-tests-ai/edt:{{ .Version }}-amd64'
-      - 'ghcr.io/event-driven-tests-ai/edt:{{ .Version }}-arm64'
-  - name_template: 'ghcr.io/event-driven-tests-ai/edt:latest'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:{{ .Version }}-amd64'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:{{ .Version }}-arm64'
+  - name_template: 'ghcr.io/sderosiaux/event-driven-tests-ai:latest'
     image_templates:
-      - 'ghcr.io/event-driven-tests-ai/edt:latest-amd64'
-      - 'ghcr.io/event-driven-tests-ai/edt:latest-arm64'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:latest-amd64'
+      - 'ghcr.io/sderosiaux/event-driven-tests-ai:latest-arm64'
 
 release:
   prerelease: auto

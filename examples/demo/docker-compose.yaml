@@ -1,0 +1,65 @@
+# Minimal "works out of the box" demo stack.
+#
+#   docker compose -f examples/demo/docker-compose.yaml up --build
+#
+# Brings up:
+#   - Redpanda (Kafka-compatible broker), port 9092 inside the compose network,
+#     19092 on the host if you want to point a local client at it
+#   - edt-cp: control plane API + UI on http://localhost:8080
+#   - edt-run: a one-shot runner that executes the demo scenario on startup
+#               (think "a single `edt run` invocation") — emits a report, then exits 0
+#
+# To re-run the scenario without restarting: `docker compose run --rm edt-run`
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.2.4
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --check=false
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info --brokers=localhost:9092 >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    ports:
+      - "19092:9092"
+
+  edt-cp:
+    build:
+      context: ../..
+    command: ["serve", "--addr=:8080"]
+    environment:
+      EDT_ADMIN_TOKEN: demo-admin
+    ports:
+      - "${EDT_CP_PORT:-8080}:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    volumes:
+      - ./scenario.yaml:/etc/edt/scenario.yaml:ro
+
+  edt-run:
+    build:
+      context: ../..
+    command:
+      - run
+      - --file=/etc/edt/scenario.yaml
+      - --report-to=http://edt-cp:8080
+      - --report-token=demo-admin
+    depends_on:
+      edt-cp:
+        condition: service_started
+      redpanda:
+        condition: service_healthy
+    volumes:
+      - ./scenario.yaml:/etc/edt/scenario.yaml:ro
+    restart: "no"

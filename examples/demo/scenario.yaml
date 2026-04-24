@@ -1,0 +1,32 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: demo-order-flow
+  labels:
+    env: compose-demo
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: redpanda:9092
+  data:
+    orders:
+      generator:
+        strategy: faker
+        seed: 42
+        overrides:
+          orderId: ${uuid()}
+          customerId: ${faker.person.id()}
+          amount: ${faker.number.float(10, 500)}
+  steps:
+    - name: place-orders
+      produce:
+        topic: orders
+        payload: ${data.orders}
+        count: 20
+  checks:
+    - name: twenty_orders_produced
+      expr: size(stream('orders')) >= 20
+      severity: critical
+    - name: all_have_unique_id
+      expr: stream('orders').all(e, e.payload.orderId != '')
+      severity: warning

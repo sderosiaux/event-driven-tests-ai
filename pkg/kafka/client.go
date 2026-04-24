@@ -52,7 +52,14 @@ func NewClient(c *scenario.KafkaConnector) (*Client, error) {
 		return nil, err
 	}
 
-	prodOpts := append([]kgo.Opt{kgo.SeedBrokers(seeds...)}, authOpts...)
+	prodOpts := append([]kgo.Opt{
+		kgo.SeedBrokers(seeds...),
+		// Auto-create topics on first produce so demos and tests don't require
+		// a pre-provisioned cluster. Without this, franz-go's metadata refresh
+		// loop throttles per-record produces to ~one every MetadataMinAge
+		// (~20s on defaults) when the topic doesn't yet exist.
+		kgo.AllowAutoTopicCreation(),
+	}, authOpts...)
 	cl, err := kgo.NewClient(prodOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("kafka: build producer: %w", err)
