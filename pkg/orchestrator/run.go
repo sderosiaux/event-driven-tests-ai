@@ -22,13 +22,15 @@ import (
 type Runner struct {
 	Kafka      KafkaPort
 	HTTP       HTTPPort
-	Codec      CodecPort                        // optional Schema Registry codec
+	WebSocket  WebSocketPort                     // optional; required if any step.websocket present
+	Codec      CodecPort                         // optional Schema Registry codec
 	Store      events.Store
 	Generators map[string]*data.FakerGenerator // keyed by data alias from scenario.Spec.Data
 	Logger     func(format string, args ...any) // optional, defaults to no-op
 	RunID      string                            // injected as ${run.id} for interpolation
 
 	interp *interpCtx
+	active *scenario.Scenario // set by Run; used by step handlers to reach connector config
 }
 
 // New builds a Runner from the live connectors. Tests can construct a Runner
@@ -53,6 +55,8 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) error {
 	if r.interp == nil {
 		r.interp = newInterpCtx(r.RunID, time.Now().UTC().Format(time.RFC3339))
 	}
+	r.active = s
+	defer func() { r.active = nil }()
 	for i := range s.Spec.Steps {
 		step := &s.Spec.Steps[i]
 		if err := r.runStep(ctx, step); err != nil {
@@ -70,6 +74,8 @@ func (r *Runner) runStep(ctx context.Context, step *scenario.Step) error {
 		return r.runConsume(ctx, step)
 	case step.HTTP != nil:
 		return r.runHTTP(ctx, step)
+	case step.WebSocket != nil:
+		return r.runWebSocket(ctx, step)
 	case step.Sleep != "":
 		d, err := time.ParseDuration(step.Sleep)
 		if err != nil {

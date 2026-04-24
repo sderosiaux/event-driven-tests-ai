@@ -11,6 +11,7 @@ import (
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/httpc"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/kafka"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/ws"
 )
 
 // KafkaPort is the surface the orchestrator needs from a Kafka client.
@@ -33,6 +34,19 @@ type ConsumeRequest = kafka.ConsumeRequest
 type HTTPPort interface {
 	Do(ctx context.Context, step *scenario.HTTPStep) (*httpc.Response, error)
 }
+
+// WebSocketPort is the surface the orchestrator needs from a WebSocket
+// client. Open dials one connection; the returned WebSocketSession is driven
+// by the step to send (optional) and read up to N messages. Tests supply a
+// fake that feeds canned frames via the same ws.Session shape.
+type WebSocketPort interface {
+	Open(ctx context.Context, base *scenario.WebSocketConnector, step *scenario.WebSocketStep) (WebSocketSession, error)
+}
+
+// WebSocketSession re-exports ws.Session so test doubles only need the one
+// name. Structurally equivalent to ws.Session; any implementor of one is
+// an implementor of the other.
+type WebSocketSession = ws.Session
 
 // CodecPort is the surface the orchestrator needs from a Schema Registry
 // codec: encode a Go value for a subject (produce) and decode a wire payload

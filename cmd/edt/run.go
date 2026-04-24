@@ -18,6 +18,7 @@ import (
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/orchestrator"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/reporter"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/ws"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	sr "github.com/sderosiaux/event-driven-tests-ai/pkg/schemaregistry"
 	"github.com/spf13/cobra"
@@ -108,6 +109,9 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 	store := events.NewMemStore(0)
 	runner := orchestrator.New(s, kp, hp, store)
 	runner.RunID = runID
+	if s.Spec.Connectors.WebSocket != nil {
+		runner.WebSocket = ws.NewAdapter()
+	}
 	if sc := srClientFor(s); sc != nil {
 		runner.Codec = sr.NewCodec(sc)
 	}

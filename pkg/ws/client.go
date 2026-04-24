@@ -11,12 +11,14 @@ package ws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 )
@@ -25,6 +27,53 @@ import (
 // step; callers are responsible for calling Close when the step finishes.
 type Client struct {
 	conn *websocket.Conn
+}
+
+// Adapter plugs pkg/ws into orchestrator.WebSocketPort. It dials on demand;
+// one session per WebSocketStep, closed by the orchestrator when the step
+// finishes. One Adapter instance is enough per scenario run.
+type Adapter struct{}
+
+// NewAdapter returns the default implementation of orchestrator.WebSocketPort.
+func NewAdapter() *Adapter { return &Adapter{} }
+
+// Session is the runtime view the orchestrator drives. Satisfied by *Client
+// plus any caller-provided fake that speaks the same three methods.
+type Session interface {
+	SendJSON(ctx context.Context, v any) error
+	Read(ctx context.Context) (Message, error)
+	Close()
+}
+
+// Open dials the configured endpoint and returns a session the orchestrator
+// can drive. Auth headers are resolved from the connector's HTTPAuth block so
+// the WebSocket upgrade carries the same bearer/basic credentials the REST
+// side of the service would accept.
+func (Adapter) Open(ctx context.Context, conn *scenario.WebSocketConnector, step *scenario.WebSocketStep) (Session, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("ws: connector is nil — scenario is missing spec.connectors.websocket")
+	}
+	var headers http.Header
+	if conn.Auth != nil {
+		headers = http.Header{}
+		switch conn.Auth.Type {
+		case "bearer":
+			headers.Set("Authorization", "Bearer "+conn.Auth.Token)
+		case "basic":
+			// Base64 encoding happens here so the fetcher stays idiomatic on the
+			// WebSocket upgrade, which has no SDK-native basic-auth helper.
+			headers.Set("Authorization", "Basic "+basicAuth(conn.Auth.User, conn.Auth.Pass))
+		}
+	}
+	return Dial(ctx, Config{
+		BaseURL: conn.BaseURL,
+		Path:    step.Path,
+		Headers: headers,
+	})
+}
+
+func basicAuth(user, pass string) string {
+	return base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
 }
 
 // Config drives Dial. BaseURL must be a ws:// or wss:// URL; a trailing slash

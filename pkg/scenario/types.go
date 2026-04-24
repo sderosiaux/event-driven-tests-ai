@@ -29,8 +29,17 @@ type Spec struct {
 // ---- Connectors -------------------------------------------------------------
 
 type Connectors struct {
-	Kafka *KafkaConnector `yaml:"kafka,omitempty" json:"kafka,omitempty"`
-	HTTP  *HTTPConnector  `yaml:"http,omitempty" json:"http,omitempty"`
+	Kafka     *KafkaConnector     `yaml:"kafka,omitempty" json:"kafka,omitempty"`
+	HTTP      *HTTPConnector      `yaml:"http,omitempty" json:"http,omitempty"`
+	WebSocket *WebSocketConnector `yaml:"websocket,omitempty" json:"websocket,omitempty"`
+}
+
+// WebSocketConnector wires a scenario to a WebSocket endpoint. BaseURL must be
+// ws:// or wss://; Path is joined per-step. Auth reuses HTTPAuth because the
+// WebSocket handshake is HTTP and most servers share auth with their REST API.
+type WebSocketConnector struct {
+	BaseURL string    `yaml:"base_url" json:"base_url"`
+	Auth    *HTTPAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
 type KafkaConnector struct {
@@ -110,11 +119,26 @@ type Generator struct {
 // ---- Steps ------------------------------------------------------------------
 
 type Step struct {
-	Name    string        `yaml:"name" json:"name"`
-	Produce *ProduceStep  `yaml:"produce,omitempty" json:"produce,omitempty"`
-	Consume *ConsumeStep  `yaml:"consume,omitempty" json:"consume,omitempty"`
-	HTTP    *HTTPStep     `yaml:"http,omitempty" json:"http,omitempty"`
-	Sleep   string        `yaml:"sleep,omitempty" json:"sleep,omitempty"`
+	Name      string             `yaml:"name" json:"name"`
+	Produce   *ProduceStep       `yaml:"produce,omitempty" json:"produce,omitempty"`
+	Consume   *ConsumeStep       `yaml:"consume,omitempty" json:"consume,omitempty"`
+	HTTP      *HTTPStep          `yaml:"http,omitempty" json:"http,omitempty"`
+	WebSocket *WebSocketStep     `yaml:"websocket,omitempty" json:"websocket,omitempty"`
+	Sleep     string             `yaml:"sleep,omitempty" json:"sleep,omitempty"`
+}
+
+// WebSocketStep dials the connector, optionally sends a JSON message, then
+// reads up to Count messages (or until Timeout) and persists each into the
+// events store under stream name "ws:<path>". Match rules work the same as
+// ConsumeStep — evaluated against each received payload until one matches.
+// SlowMode is honoured per inbound message, not per send.
+type WebSocketStep struct {
+	Path     string       `yaml:"path" json:"path"`
+	Send     string       `yaml:"send,omitempty" json:"send,omitempty"` // optional initial JSON frame, goes through ${interp}
+	Count    int          `yaml:"count,omitempty" json:"count,omitempty"` // 0 = wait for first match or timeout
+	Timeout  string       `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Match    []MatchRule  `yaml:"match,omitempty" json:"match,omitempty"`
+	SlowMode *SlowMode    `yaml:"slow_mode,omitempty" json:"slow_mode,omitempty"`
 }
 
 type ProduceStep struct {
