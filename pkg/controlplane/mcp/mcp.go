@@ -23,7 +23,9 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -62,26 +64,85 @@ type Server struct {
 
 func New(store storage.Storage) *Server { return &Server{store: store} }
 
-// Handler returns the HTTP handler to mount at /mcp. The same endpoint handles
-// every method; the body carries the dispatch information.
+// Handler returns the HTTP handler to mount at /mcp. Accepts either a single
+// JSON-RPC request object or a batch array (MCP 2025-03-26 transport). Requests
+// without `id` are treated as notifications: processed but no JSON-RPC body is
+// returned (HTTP 202).
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeRPC(w, rpcResponse{JSONRPC: jsonRPCVersion, Error: &rpcError{Code: -32600, Message: "mcp: POST only"}})
 			return
 		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 		if err != nil {
 			writeRPC(w, rpcResponse{JSONRPC: jsonRPCVersion, Error: &rpcError{Code: -32700, Message: err.Error()}})
 			return
 		}
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 {
+			writeRPC(w, rpcResponse{JSONRPC: jsonRPCVersion, Error: &rpcError{Code: -32700, Message: "empty request body"}})
+			return
+		}
+
+		// Batch: [ {...}, {...} ].
+		if trimmed[0] == '[' {
+			var batch []rpcRequest
+			if err := json.Unmarshal(trimmed, &batch); err != nil {
+				writeRPC(w, rpcResponse{JSONRPC: jsonRPCVersion, Error: &rpcError{Code: -32700, Message: "batch parse error: " + err.Error()}})
+				return
+			}
+			if len(batch) == 0 {
+				writeRPC(w, rpcResponse{JSONRPC: jsonRPCVersion, Error: &rpcError{Code: -32600, Message: "empty batch"}})
+				return
+			}
+			var out []rpcResponse
+			for _, req := range batch {
+				if isNotification(req) {
+					_ = s.dispatch(r, req) // side-effect only
+					continue
+				}
+				out = append(out, s.dispatch(r, req))
+			}
+			if len(out) == 0 {
+				// All notifications — per spec the server MAY return 202 with no body.
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+			writeRPCBatch(w, out)
+			return
+		}
+
+		// Single request or notification.
 		var req rpcRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		if err := json.Unmarshal(trimmed, &req); err != nil {
 			writeRPC(w, rpcResponse{JSONRPC: jsonRPCVersion, Error: &rpcError{Code: -32700, Message: "parse error: " + err.Error()}})
+			return
+		}
+		if isNotification(req) {
+			_ = s.dispatch(r, req)
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
 		writeRPC(w, s.dispatch(r, req))
 	})
+}
+
+// isNotification reports whether the JSON-RPC request omitted `id` entirely.
+// Per JSON-RPC 2.0 notifications must not receive a response.
+func isNotification(req rpcRequest) bool {
+	if len(req.ID) == 0 {
+		return true
+	}
+	return bytes.Equal(bytes.TrimSpace(req.ID), []byte("null")) || bytes.TrimSpace(req.ID)[0] == 0
+}
+
+func writeRPCBatch(w http.ResponseWriter, responses []rpcResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	for i := range responses {
+		responses[i].JSONRPC = jsonRPCVersion
+	}
+	_ = json.NewEncoder(w).Encode(responses)
 }
 
 func writeRPC(w http.ResponseWriter, resp rpcResponse) {
@@ -111,13 +172,22 @@ func (s *Server) dispatch(r *http.Request, req rpcRequest) rpcResponse {
 }
 
 // toolDescriptors is the static manifest clients discover through tools/list.
-// The schemas here are the contract we ship to every MCP client.
+// Every tool carries the 2025-03-26 annotations so MCP clients (Claude Code,
+// Cursor, Desktop) can reason about safety: readOnlyHint=true marks us as
+// non-mutating; destructiveHint=false rules out side effects.
 func toolDescriptors() []map[string]any {
+	readOnly := map[string]any{
+		"readOnlyHint":    true,
+		"destructiveHint": false,
+		"idempotentHint":  true,
+		"openWorldHint":   false,
+	}
 	return []map[string]any{
 		{
 			"name":        "list_scenarios",
 			"description": "List every scenario stored in the control plane.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+			"annotations": readOnly,
 		},
 		{
 			"name":        "get_scenario",
@@ -129,6 +199,7 @@ func toolDescriptors() []map[string]any {
 					"name": map[string]any{"type": "string"},
 				},
 			},
+			"annotations": readOnly,
 		},
 		{
 			"name":        "list_runs",
@@ -140,6 +211,7 @@ func toolDescriptors() []map[string]any {
 					"limit":    map[string]any{"type": "integer", "minimum": 1, "maximum": 1000},
 				},
 			},
+			"annotations": readOnly,
 		},
 		{
 			"name":        "get_run",
@@ -151,6 +223,7 @@ func toolDescriptors() []map[string]any {
 					"run_id": map[string]any{"type": "string"},
 				},
 			},
+			"annotations": readOnly,
 		},
 		{
 			"name":        "scenario_slo",
@@ -163,11 +236,13 @@ func toolDescriptors() []map[string]any {
 					"window": map[string]any{"type": "string", "description": "Go duration (e.g. '5m', '1h', '24h')"},
 				},
 			},
+			"annotations": readOnly,
 		},
 		{
 			"name":        "list_workers",
 			"description": "List registered workers with last-heartbeat timestamps.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+			"annotations": readOnly,
 		},
 	}
 }
@@ -184,12 +259,26 @@ func (s *Server) toolsCall(r *http.Request, req rpcRequest) rpcResponse {
 	}
 	out, err := s.invoke(r, p)
 	if err != nil {
+		// Missing resources get the MCP-conventional -32002 with the tool name
+		// and arguments echoed in `data` so clients can present a helpful
+		// message without a second probe.
+		if errors.Is(err, storage.ErrNotFound) {
+			return rpcResponse{ID: req.ID, Error: &rpcError{
+				Code:    -32002,
+				Message: err.Error(),
+				Data:    map[string]any{"tool": p.Name, "arguments": json.RawMessage(p.Arguments)},
+			}}
+		}
+		// Anything else is a genuine internal failure.
 		return rpcResponse{ID: req.ID, Error: &rpcError{Code: -32603, Message: err.Error()}}
 	}
-	// MCP tool results wrap the payload in a content array with a text block.
+	// MCP tool results wrap the payload in a content array and advertise
+	// `isError: false` so a 2025-03-26 client can distinguish success from
+	// tool-level failure without inspecting the payload.
 	jsonBytes, _ := json.MarshalIndent(out, "", "  ")
 	return rpcResponse{ID: req.ID, Result: map[string]any{
 		"content": []map[string]any{{"type": "text", "text": string(jsonBytes)}},
+		"isError": false,
 	}}
 }
 

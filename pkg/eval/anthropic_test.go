@@ -41,3 +41,22 @@ func TestParseVerdictPicksFirstObjectWithScore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3.0, v)
 }
+
+// Codex P1 #10: unrelated score fields inside nested or leading objects must
+// not be picked up as verdicts. Tokeniser walks balanced braces rather than
+// regex-matching the first brace-wrapped "score".
+func TestParseVerdictSkipsNestedScoreInRubricEcho(t *testing.T) {
+	txt := `Rubric echo: {"criteria":[{"score_hint":"1-5"}], "note":"ignore this"}.
+Actual verdict: {"score": 4.2, "rationale": "ok"}`
+	v, _, err := parseVerdict(txt)
+	require.NoError(t, err)
+	assert.InDelta(t, 4.2, v, 1e-9)
+}
+
+func TestParseVerdictHandlesStringWithEscapedBraces(t *testing.T) {
+	txt := `{"rationale": "the JSON \"{score}\" isn't a real score", "note": "skip"}
+{"score": 5, "rationale": "final"}`
+	v, _, err := parseVerdict(txt)
+	require.NoError(t, err)
+	assert.Equal(t, 5.0, v)
+}

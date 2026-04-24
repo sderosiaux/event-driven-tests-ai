@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -131,27 +130,87 @@ func extractText(m *anthropic.Message) string {
 	return b.String()
 }
 
-// verdictRE captures the first JSON object with a `score` field. We accept
-// either a bare object or one embedded in prose/Markdown fences.
-var verdictRE = regexp.MustCompile(`(?s)\{[^{}]*"score"[^{}]*\}`)
-
+// parseVerdict walks the response text for every balanced JSON object and
+// returns the first one whose shape decodes as a real verdict (numeric score
+// + optional rationale). Previous regex-based implementations grabbed the
+// first brace-wrapped text containing "score" — including unrelated objects
+// in the rubric echo. Tokenising properly handles nested braces, quoted
+// strings with escaped quotes, and picks the first legitimate verdict.
 func parseVerdict(text string) (float64, string, error) {
-	match := verdictRE.FindString(text)
-	if match == "" {
-		return 0, "", fmt.Errorf("eval: no JSON verdict found in response: %q", truncate(text, 200))
+	var firstErr error
+	for _, candidate := range scanJSONObjects(text) {
+		var parsed struct {
+			Score     any    `json:"score"`
+			Rationale string `json:"rationale"`
+		}
+		if err := json.Unmarshal([]byte(candidate), &parsed); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if parsed.Score == nil {
+			continue
+		}
+		value, err := coerceScore(parsed.Score)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		return value, parsed.Rationale, nil
 	}
-	var parsed struct {
-		Score     any    `json:"score"`
-		Rationale string `json:"rationale"`
+	if firstErr != nil {
+		return 0, "", fmt.Errorf("eval: decode verdict: %w", firstErr)
 	}
-	if err := json.Unmarshal([]byte(match), &parsed); err != nil {
-		return 0, "", fmt.Errorf("eval: decode verdict: %w", err)
+	return 0, "", fmt.Errorf("eval: no JSON verdict found in response: %q", truncate(text, 200))
+}
+
+// scanJSONObjects yields every balanced top-level `{...}` block in text,
+// honouring string quoting and backslash escapes. Callers filter to
+// verdict-shaped objects themselves.
+func scanJSONObjects(text string) []string {
+	var out []string
+	depth := 0
+	start := -1
+	inString := false
+	escape := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			if escape {
+				escape = false
+				continue
+			}
+			switch c {
+			case '\\':
+				escape = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				out = append(out, text[start:i+1])
+				start = -1
+			}
+		}
 	}
-	value, err := coerceScore(parsed.Score)
-	if err != nil {
-		return 0, "", err
-	}
-	return value, parsed.Rationale, nil
+	return out
 }
 
 func coerceScore(v any) (float64, error) {
