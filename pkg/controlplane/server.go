@@ -173,8 +173,20 @@ func (s *Server) routes() {
 	s.router.Handle("/ui/static/*", staticHandler)
 	s.router.Get("/", s.serveIndex)
 	s.router.Get("/ui/runs", s.serveIndex)
+	s.router.Get("/ui/runs/{id}", s.serveIndex)
 	s.router.Get("/ui/evals", s.serveIndex)
 	s.router.Get("/ui/workers", s.serveIndex)
+	s.router.Get("/ui/builder", s.serveBuilder)
+}
+
+func (s *Server) serveBuilder(w http.ResponseWriter, _ *http.Request) {
+	body, err := ui.Builder()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(body)
 }
 
 // mcpWritePolicy returns a WritePolicy that permits mutating tools only for
@@ -214,6 +226,10 @@ func (s *Server) serveIndex(w http.ResponseWriter, _ *http.Request) {
 // Handler returns the underlying http.Handler for direct use in tests
 // (httptest.NewServer(s.Handler())).
 func (s *Server) Handler() http.Handler { return s.router }
+
+// Store exposes the underlying Storage so callers (e.g. `edt serve
+// --seed-dir`) can upsert scenarios before Run blocks.
+func (s *Server) Store() storage.Storage { return s.store }
 
 // Run binds the listener and serves until ctx is cancelled. Returns the first
 // non-graceful-shutdown error from http.Server.ListenAndServe.

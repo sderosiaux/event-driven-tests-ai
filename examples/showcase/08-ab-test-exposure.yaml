@@ -1,0 +1,57 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: ab-test-exposure
+  labels:
+    domain: experimentation
+    criticality: medium
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+    http:
+      base_url: ${HTTPBIN_URL}
+  data:
+    exposure:
+      generator:
+        strategy: faker
+        seed: 8
+        overrides:
+          experiment_id: EXP_checkout_button_v3
+          user_id: ${uuid()}
+          variant: ${faker.helpers.arrayElement(["control","treatment"])}
+          device: ${faker.helpers.arrayElement(["mobile-ios","mobile-android","desktop"])}
+          bucket_hash: ${faker.string.numeric(10)}
+  steps:
+    - name: emit-40-exposures
+      produce:
+        topic: showcase.experiments.exposures
+        payload: ${data.exposure}
+        count: 40
+        rate: 80/s
+    - name: forward-to-analytics
+      http:
+        method: POST
+        path: /anything
+        headers:
+          X-Experiment: EXP_checkout_button_v3
+        body: '{"batch":40,"deduped":true}'
+        expect:
+          status: 200
+  checks:
+    - name: all_exposures_emitted
+      expr: size(stream('showcase.experiments.exposures')) >= 40
+      severity: critical
+    - name: both_variants_seen
+      expr: |
+        stream('showcase.experiments.exposures').filter(e, e.payload.variant == 'control').size() >= 1 &&
+        stream('showcase.experiments.exposures').filter(e, e.payload.variant == 'treatment').size() >= 1
+      severity: critical
+    - name: variant_split_not_degenerate
+      expr: |
+        double(stream('showcase.experiments.exposures').filter(e, e.payload.variant == 'treatment').size()) / 40.0
+        >= 0.20
+      severity: warning
+    - name: analytics_endpoint_received_it
+      expr: size(stream('http:/anything')) >= 1
+      severity: critical

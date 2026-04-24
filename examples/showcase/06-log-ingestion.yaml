@@ -1,0 +1,49 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: log-ingestion-throughput
+  labels:
+    domain: observability
+    criticality: medium
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+  data:
+    log:
+      generator:
+        strategy: faker
+        seed: 6
+        overrides:
+          ts: ${now()}
+          level: ${faker.helpers.arrayElement(["debug","info","warn","error"])}
+          service: ${faker.helpers.arrayElement(["auth","billing","checkout","catalog","search"])}
+          msg: ${faker.lorem.sentence()}
+          trace_id: ${faker.string.hexadecimal(16)}
+  steps:
+    - name: blast-500-logs
+      produce:
+        topic: showcase.observability.logs
+        payload: ${data.log}
+        count: 500
+        rate: 500/s
+    - name: tail-them
+      consume:
+        topic: showcase.observability.logs
+        group: showcase-log-tailer
+        timeout: 15s
+        match:
+          - key: payload.level in ['debug','info','warn','error']
+  checks:
+    - name: five_hundred_logs
+      expr: size(stream('showcase.observability.logs')) >= 500
+      severity: critical
+    - name: error_rate_under_20pct
+      expr: |
+        double(stream('showcase.observability.logs').filter(e, e.payload.level == 'error').size())
+        / double(stream('showcase.observability.logs').size()) < 0.20
+      severity: warning
+    - name: all_services_represented
+      expr: |
+        stream('showcase.observability.logs').map(e, e.payload.service).size() >= 5
+      severity: info

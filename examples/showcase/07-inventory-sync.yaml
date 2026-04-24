@@ -1,0 +1,48 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: inventory-sync
+  labels:
+    domain: supply-chain
+    criticality: high
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+  data:
+    adjustment:
+      generator:
+        strategy: faker
+        seed: 7
+        overrides:
+          sku: SKU_${faker.string.alphanumeric(6)}
+          warehouse: ${faker.helpers.arrayElement(["EU-AMS","EU-FRA","US-IAD","US-SFO"])}
+          delta: ${faker.number.int(-20, 50)}
+          reason: ${faker.helpers.arrayElement(["sale","return","restock","damage","audit"])}
+  steps:
+    - name: emit-25-stock-adjustments
+      produce:
+        topic: showcase.inventory.adjustments
+        payload: ${data.adjustment}
+        count: 25
+    - name: replay-into-consumer
+      consume:
+        topic: showcase.inventory.adjustments
+        group: showcase-inventory-replicator
+        timeout: 10s
+        match:
+          - key: payload.sku != ''
+  checks:
+    - name: twenty_five_adjustments
+      expr: size(stream('showcase.inventory.adjustments')) >= 25
+      severity: critical
+    - name: no_orphan_warehouse
+      expr: |
+        stream('showcase.inventory.adjustments').all(e,
+          e.payload.warehouse in ['EU-AMS','EU-FRA','US-IAD','US-SFO']
+        )
+      severity: critical
+    - name: restock_count_reasonable
+      expr: |
+        stream('showcase.inventory.adjustments').filter(e, e.payload.reason == 'restock').size() >= 1
+      severity: info

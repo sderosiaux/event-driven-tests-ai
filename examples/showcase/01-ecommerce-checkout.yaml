@@ -1,0 +1,58 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: ecommerce-checkout
+  labels:
+    domain: ecommerce
+    criticality: high
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+    http:
+      base_url: ${HTTPBIN_URL}
+  data:
+    orders:
+      generator:
+        strategy: faker
+        seed: 1
+        overrides:
+          order_id: ${uuid()}
+          customer_id: ${faker.person.id()}
+          cart_total: ${faker.number.float(10, 750)}
+          currency: EUR
+  steps:
+    - name: place-50-orders
+      produce:
+        topic: showcase.checkout.orders
+        payload: ${data.orders}
+        count: 50
+        rate: 100/s
+    - name: verify-payment-gateway
+      http:
+        method: GET
+        path: /status/200
+        expect:
+          status: 200
+    - name: capture-payment
+      http:
+        method: POST
+        path: /anything
+        headers:
+          X-Checkout-Session: ${run.id}
+        body: '{"action":"capture","amount":42.50}'
+        expect:
+          status: 200
+  checks:
+    - name: fifty_orders_produced
+      expr: size(stream('showcase.checkout.orders')) >= 50
+      severity: critical
+    - name: every_order_has_customer
+      expr: stream('showcase.checkout.orders').all(e, e.payload.customer_id != '')
+      severity: critical
+    - name: gateway_reachable
+      expr: size(stream('http:/status/200')) >= 1
+      severity: critical
+    - name: payment_captured
+      expr: size(stream('http:/anything')) >= 1
+      severity: warning

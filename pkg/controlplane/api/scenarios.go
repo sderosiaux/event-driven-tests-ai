@@ -139,6 +139,15 @@ func (a *API) createScenario(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "metadata.name is required")
 		return
 	}
+	// Dry-run: validate but don't persist. Used by the UI builder.
+	if r.URL.Query().Get("dry_run") == "1" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"dry_run": true,
+			"name":    parsed.Metadata.Name,
+			"valid":   true,
+		})
+		return
+	}
 	saved, err := a.Store.UpsertScenario(r.Context(), parsed.Metadata.Name, yamlBytes, parsed.Metadata.Labels)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

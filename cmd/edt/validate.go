@@ -17,10 +17,13 @@ func newValidateCmd() *cobra.Command {
 			if file == "" {
 				return fmt.Errorf("--file is required")
 			}
-			b, err := os.ReadFile(file)
+			raw, err := os.ReadFile(file)
 			if err != nil {
 				return err
 			}
+			// Env expansion so templated scenarios can validate against host
+			// env vars. Same rules as `edt run`: only ${ALL_CAPS} placeholders.
+			b := []byte(expandHostEnv(string(raw)))
 			// Parse (catches syntax, unknown fields).
 			if _, err := scenario.Parse(b); err != nil {
 				return err

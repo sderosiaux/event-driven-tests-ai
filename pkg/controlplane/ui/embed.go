@@ -27,3 +27,8 @@ func StaticFS() http.FileSystem {
 func Index() ([]byte, error) {
 	return staticFS.ReadFile("static/index.html")
 }
+
+// Builder returns the scenario-builder HTML shell.
+func Builder() ([]byte, error) {
+	return staticFS.ReadFile("static/builder.html")
+}

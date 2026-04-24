@@ -1,0 +1,59 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: user-signup-flow
+  labels:
+    domain: identity
+    criticality: high
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+    http:
+      base_url: ${HTTPBIN_URL}
+  data:
+    signup:
+      generator:
+        strategy: faker
+        seed: 5
+        overrides:
+          user_id: ${uuid()}
+          email: ${faker.internet.email()}
+          plan: ${faker.helpers.arrayElement(["free","pro","enterprise"])}
+          source: ${faker.helpers.arrayElement(["organic","paid","referral"])}
+  steps:
+    - name: emit-signup-events
+      produce:
+        topic: showcase.identity.signups
+        payload: ${data.signup}
+        count: 15
+    - name: trigger-verification-email
+      http:
+        method: POST
+        path: /anything
+        headers:
+          X-Email-Template: welcome-v2
+        body: '{"template":"welcome","recipients":15}'
+        expect:
+          status: 200
+    - name: wait-before-activation
+      sleep: 500ms
+    - name: activate-accounts
+      http:
+        method: POST
+        path: /anything
+        body: '{"action":"activate","count":15}'
+        expect:
+          status: 200
+  checks:
+    - name: signups_emitted
+      expr: size(stream('showcase.identity.signups')) >= 15
+      severity: critical
+    - name: email_service_called
+      expr: size(stream('http:/anything')) >= 2
+      severity: critical
+    - name: plan_mix_looks_reasonable
+      expr: |
+        stream('showcase.identity.signups').filter(e, e.payload.plan == 'free').size() >= 1 &&
+        stream('showcase.identity.signups').filter(e, e.payload.plan == 'pro').size() >= 1
+      severity: info

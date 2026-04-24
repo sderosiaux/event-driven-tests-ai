@@ -13,6 +13,7 @@ import (
 	"fmt"
 	mrand "math/rand"
 	"regexp"
+	"time"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,10 +56,17 @@ func (r *Registry) lookup(name string) (Helper, bool) {
 
 func (r *Registry) RegisterDefaults() {
 	r.Register("uuid", helperUUID)
+	r.Register("now", helperNow)
 	r.Register("faker.person.id", helperPersonID)
 	r.Register("faker.number.int", helperNumberInt)
 	r.Register("faker.number.float", helperNumberFloat)
 	r.Register("faker.string.alphanumeric", helperAlphanumeric)
+	r.Register("faker.string.hexadecimal", helperHexadecimal)
+	r.Register("faker.string.numeric", helperNumeric)
+	r.Register("faker.internet.email", helperEmail)
+	r.Register("faker.location.countryCode", helperCountryCode)
+	r.Register("faker.lorem.sentence", helperLoremSentence)
+	r.Register("faker.helpers.arrayElement", helperArrayElement)
 }
 
 // FakerGenerator is the default Generator. It evaluates each override entry
@@ -131,9 +139,15 @@ func (g *FakerGenerator) resolve(expr string) (any, error) {
 
 // splitArgs tokenizes a comma-separated argument list. Double-quoted strings
 // are returned without their surrounding quotes and may contain commas, parens,
-// and escaped quotes (`\"`).
+// and escaped quotes (`\"`). Leading `[` and trailing `]` are accepted so
+// fakerjs-style array literals (`arrayElement(["a","b"])`) tokenize the same
+// as flat arguments (`arrayElement("a","b")`) — otherwise each element would
+// pick up a bracket as part of its string.
 func splitArgs(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
+		raw = strings.TrimSpace(raw[1 : len(raw)-1])
+	}
 	if raw == "" {
 		return nil, nil
 	}
@@ -227,3 +241,92 @@ func SecureRandomBytes(n int) ([]byte, error) {
 	_, err := rand.Read(b)
 	return b, err
 }
+
+// ---- Extended faker helpers ------------------------------------------------
+//
+// These are the minimum set needed to express realistic multi-domain
+// scenarios (payments, IoT, experimentation, logs). They match the names of
+// the fakerjs API so TS-authored scenarios and YAML-authored scenarios
+// converge on one vocabulary.
+
+// helperNow returns the current UTC time in RFC-3339. Non-deterministic by
+// design — scenarios that want seeded time should mint it from seeded ints.
+func helperNow(_ []string, _ *mrand.Rand) (any, error) {
+	return time.Now().UTC().Format(time.RFC3339Nano), nil
+}
+
+func helperHexadecimal(args []string, rng *mrand.Rand) (any, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("faker.string.hexadecimal(n): expected 1 arg")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n <= 0 || n > 1024 {
+		return nil, fmt.Errorf("faker.string.hexadecimal: invalid length %q", args[0])
+	}
+	const alphabet = "0123456789abcdef"
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = alphabet[rng.Intn(len(alphabet))]
+	}
+	return string(out), nil
+}
+
+func helperNumeric(args []string, rng *mrand.Rand) (any, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("faker.string.numeric(n): expected 1 arg")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n <= 0 || n > 1024 {
+		return nil, fmt.Errorf("faker.string.numeric: invalid length %q", args[0])
+	}
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = byte('0' + rng.Intn(10))
+	}
+	return string(out), nil
+}
+
+// helperEmail mints a plausible email. Deterministic given the seed; no real
+// network or dictionary lookup.
+func helperEmail(_ []string, rng *mrand.Rand) (any, error) {
+	first := commonFirsts[rng.Intn(len(commonFirsts))]
+	last := commonLasts[rng.Intn(len(commonLasts))]
+	domain := commonDomains[rng.Intn(len(commonDomains))]
+	return fmt.Sprintf("%s.%s@%s", first, last, domain), nil
+}
+
+// helperCountryCode returns a random ISO-3166 alpha-2 code from a fixed set.
+func helperCountryCode(_ []string, rng *mrand.Rand) (any, error) {
+	return commonCountries[rng.Intn(len(commonCountries))], nil
+}
+
+// helperLoremSentence returns a short random sentence assembled from the
+// lorem word list.
+func helperLoremSentence(_ []string, rng *mrand.Rand) (any, error) {
+	n := 6 + rng.Intn(6) // 6–11 words
+	words := make([]string, n)
+	for i := range words {
+		words[i] = loremWords[rng.Intn(len(loremWords))]
+	}
+	return strings.ToUpper(words[0][:1]) + words[0][1:] + " " + strings.Join(words[1:], " ") + ".", nil
+}
+
+// helperArrayElement picks one of the supplied arguments uniformly. Matches
+// fakerjs's helpers.arrayElement([a, b, c]). All args arrive as pre-quoted
+// strings from the tokenizer, so we forward the raw value.
+func helperArrayElement(args []string, rng *mrand.Rand) (any, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("faker.helpers.arrayElement: needs at least 1 arg")
+	}
+	return args[rng.Intn(len(args))], nil
+}
+
+// Word/name pools. Kept small but plausible; use dedicated fixtures (not
+// committed here) if you need cultural diversity or collision resistance.
+var (
+	commonFirsts    = []string{"alice", "bob", "charlie", "dana", "eve", "frank", "gwen", "hiro", "ingrid", "juan", "kate", "leo", "maya", "nina", "omar", "priya", "quinn", "rhea", "sam", "tara"}
+	commonLasts     = []string{"smith", "dupont", "rossi", "nakamura", "alvarez", "tanaka", "silva", "patel", "kim", "ivanov", "okonkwo", "hansen", "mueller", "costa", "romero"}
+	commonDomains   = []string{"example.com", "mail.test", "edt.local", "corp.invalid", "demo.invalid"}
+	commonCountries = []string{"FR", "US", "DE", "JP", "BR", "IN", "GB", "CA", "AU", "NL", "SE", "PL", "ES", "IT", "MX"}
+	loremWords      = []string{"lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit", "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "magna", "aliqua", "minim", "veniam", "quis"}
+)

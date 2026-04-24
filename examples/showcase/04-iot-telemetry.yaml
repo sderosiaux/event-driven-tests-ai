@@ -1,0 +1,48 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: iot-telemetry-burst
+  labels:
+    domain: iot
+    criticality: medium
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+  data:
+    reading:
+      generator:
+        strategy: faker
+        seed: 4
+        overrides:
+          device_id: DEV_${faker.string.numeric(6)}
+          site_id: SITE_${faker.helpers.arrayElement(["A","B","C","D"])}
+          temp_c: ${faker.number.float(-10, 45)}
+          humidity_pct: ${faker.number.float(5, 95)}
+          battery_mv: ${faker.number.int(2800, 4200)}
+  steps:
+    - name: burst-100-readings
+      produce:
+        topic: showcase.iot.readings
+        payload: ${data.reading}
+        count: 100
+        rate: 200/s
+    - name: consume-back-as-gateway
+      consume:
+        topic: showcase.iot.readings
+        group: showcase-iot-gateway
+        timeout: 10s
+        match:
+          - key: payload.battery_mv >= 2800
+  checks:
+    - name: hundred_readings_emitted
+      expr: size(stream('showcase.iot.readings')) >= 100
+      severity: critical
+    - name: no_low_battery_alerts
+      expr: |
+        stream('showcase.iot.readings').filter(e, e.payload.battery_mv < 3000).size() <= 30
+      severity: warning
+    - name: all_four_sites_reporting
+      expr: |
+        stream('showcase.iot.readings').map(e, e.payload.site_id).size() >= 4
+      severity: info

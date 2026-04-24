@@ -54,10 +54,19 @@ func newRunCmd() *cobra.Command {
 }
 
 func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
-	b, err := os.ReadFile(f.file)
+	raw, err := os.ReadFile(f.file)
 	if err != nil {
 		return err
 	}
+	// Expand ${ENV_VAR} placeholders (bare ALL_CAPS/underscore names only)
+	// from the host environment before parsing, so templated scenarios —
+	// notably examples/showcase/*.yaml — share one file between docker-compose
+	// and local dev with different broker hostnames.
+	// Scenario-level interpolations like ${run.id}, ${previous.foo}, ${uuid()},
+	// ${faker.person.id()} contain dots or parens and are deliberately NOT
+	// env-expanded; they pass through untouched for the orchestrator to handle
+	// at step time.
+	b := []byte(expandHostEnv(string(raw)))
 	s, err := scenario.Parse(b)
 	if err != nil {
 		return err
@@ -220,6 +229,36 @@ func newRunID() string {
 // withSignalCancel wraps ctx with cancellation on SIGINT/SIGTERM and returns a
 // cleanup function the caller must defer. The cleanup unregisters the signal
 // handler and ensures the watcher goroutine exits, even when doRun is called
+// expandHostEnv replaces ${NAME} with os.Getenv(NAME) when NAME is a bare
+// ALL_CAPS_OR_UNDERSCORE_OR_DIGIT identifier. Any other braced expression
+// (with dots, parens, spaces) is left untouched so scenario-level
+// interpolations like ${run.id}, ${uuid()}, ${faker.person.id()} pass
+// through to the orchestrator and data-generator layers.
+func expandHostEnv(s string) string {
+	return os.Expand(s, func(key string) string {
+		if !isEnvName(key) {
+			return "${" + key + "}"
+		}
+		return os.Getenv(key)
+	})
+}
+
+func isEnvName(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i, r := range k {
+		switch {
+		case r == '_':
+		case r >= 'A' && r <= 'Z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // in library style with a long-lived parent context.
 func withSignalCancel(ctx context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(ctx)

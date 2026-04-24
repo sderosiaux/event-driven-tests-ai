@@ -1,15 +1,24 @@
-# Minimal "works out of the box" demo stack.
+# Full "works out of the box" demo stack.
 #
 #   docker compose -f examples/demo/docker-compose.yaml up --build
 #
 # Brings up:
-#   - Redpanda (Kafka-compatible broker), port 9092 inside the compose network,
-#     19092 on the host if you want to point a local client at it
-#   - edt-cp: control plane API + UI on http://localhost:8080
-#   - edt-run: a one-shot runner that executes the demo scenario on startup
-#               (think "a single `edt run` invocation") — emits a report, then exits 0
+#   - redpanda            Kafka broker (port 19092 on host)
+#   - httpbin             real HTTP service (port 18082 on host)
+#   - edt-cp              control plane + UI on http://localhost:18080
+#                         auto-seeded with 8 domain-oriented showcase scenarios
+#   - edt-seed-runs       one-shot: runs every showcase scenario once so the
+#                         /ui/runs table is populated with real data
+#   - edt-worker          long-running watch-mode worker, registers with CP
+#                         and is available for scenario assignments
 #
-# To re-run the scenario without restarting: `docker compose run --rm edt-run`
+# Open http://localhost:18080/ui/builder to build a new scenario visually.
+# Open http://localhost:18080/ui/runs to see all runs populated by the seeder.
+# Tear down with: docker compose down -v
+
+x-edt-build: &edt-build
+  build:
+    context: ../..
 
 services:
   redpanda:
@@ -31,35 +40,62 @@ services:
       retries: 30
       start_period: 10s
     ports:
-      - "19092:9092"
+      - "${EDT_KAFKA_PORT:-19092}:9092"
+
+  httpbin:
+    image: kennethreitz/httpbin
+    ports:
+      - "${EDT_HTTPBIN_PORT:-18082}:80"
+    restart: unless-stopped
 
   edt-cp:
-    build:
-      context: ../..
-    command: ["serve", "--addr=:8080"]
+    <<: *edt-build
+    command:
+      - serve
+      - --addr=:8080
+      - --seed-dir=/etc/edt/showcase
     environment:
-      EDT_ADMIN_TOKEN: demo-admin
+      # Env substitution into seeded YAMLs so they point at the compose
+      # network hostnames rather than localhost.
+      KAFKA_BROKERS: redpanda:9092
+      HTTPBIN_URL: http://httpbin
     ports:
-      - "${EDT_CP_PORT:-8080}:8080"
+      - "${EDT_CP_PORT:-18080}:8080"
     depends_on:
       redpanda:
         condition: service_healthy
     volumes:
-      - ./scenario.yaml:/etc/edt/scenario.yaml:ro
+      - ../showcase:/etc/edt/showcase:ro
 
-  edt-run:
-    build:
-      context: ../..
+  # One-shot: run each showcase scenario against the real stack so the
+  # /ui/runs table has real data the moment the user opens the UI.
+  edt-seed-runs:
+    <<: *edt-build
     command:
-      - run
-      - --file=/etc/edt/scenario.yaml
+      - batch-run
+      - --dir=/etc/edt/showcase
       - --report-to=http://edt-cp:8080
-      - --report-token=demo-admin
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      HTTPBIN_URL: http://httpbin
     depends_on:
       edt-cp:
         condition: service_started
       redpanda:
         condition: service_healthy
+      httpbin:
+        condition: service_started
     volumes:
-      - ./scenario.yaml:/etc/edt/scenario.yaml:ro
+      - ../showcase:/etc/edt/showcase:ro
     restart: "no"
+
+  edt-worker:
+    <<: *edt-build
+    command:
+      - worker
+      - --control-plane=http://edt-cp:8080
+      - --labels=env=demo,pool=showcase
+    depends_on:
+      edt-cp:
+        condition: service_started
+    restart: unless-stopped

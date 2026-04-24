@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>edt — scenario builder</title>
+<link rel="stylesheet" href="/ui/static/app.css">
+<link rel="stylesheet" href="/ui/static/builder.css">
+</head>
+<body class="builder-page">
+<header>
+  <h1>event-driven-tests-ai</h1>
+  <nav>
+    <a href="/">Scenarios</a>
+    <a href="/ui/builder" class="active">Builder</a>
+    <a href="/ui/runs">Runs</a>
+    <a href="/ui/evals">Evals</a>
+    <a href="/ui/workers">Workers</a>
+  </nav>
+  <div class="actions">
+    <button id="btn-new">New</button>
+    <button id="btn-copy">Copy YAML</button>
+    <button id="btn-validate">Validate</button>
+    <button id="btn-save" class="primary">Save to control plane</button>
+  </div>
+</header>
+
+<main class="builder-layout">
+  <aside class="palette" aria-label="Add step">
+    <h2>Scenario</h2>
+    <div class="field">
+      <label>Name</label>
+      <input id="meta-name" type="text" placeholder="my-scenario">
+    </div>
+    <div class="field">
+      <label>Labels (key=value, one per line)</label>
+      <textarea id="meta-labels" rows="2" placeholder="env=staging&#10;team=commerce"></textarea>
+    </div>
+
+    <h2>Connectors</h2>
+    <div class="field">
+      <label>Kafka bootstrap_servers</label>
+      <input id="conn-kafka" type="text" placeholder="localhost:9092">
+    </div>
+    <div class="field">
+      <label>HTTP base_url</label>
+      <input id="conn-http" type="text" placeholder="https://api.example.com">
+    </div>
+    <div class="field">
+      <label>WebSocket base_url</label>
+      <input id="conn-ws" type="text" placeholder="wss://stream.example.com">
+    </div>
+    <div class="field">
+      <label>gRPC address</label>
+      <input id="conn-grpc" type="text" placeholder="api.example.com:443">
+    </div>
+
+    <h2>Add step</h2>
+    <div class="add-grid">
+      <button data-add="produce">Produce</button>
+      <button data-add="consume">Consume</button>
+      <button data-add="http">HTTP</button>
+      <button data-add="websocket">WebSocket</button>
+      <button data-add="sse">SSE</button>
+      <button data-add="grpc">gRPC</button>
+      <button data-add="sleep">Sleep</button>
+    </div>
+
+    <h2>Add check</h2>
+    <button id="btn-add-check" class="wide">+ CEL check</button>
+  </aside>
+
+  <section class="canvas-wrap">
+    <div class="canvas-toolbar">
+      <span class="muted">Drag cards to reorder. Click a card to edit. The scenario runs top to bottom.</span>
+    </div>
+    <div id="canvas" class="canvas"></div>
+  </section>
+
+  <aside class="yaml-pane" aria-label="YAML preview">
+    <div class="yaml-toolbar">
+      <span class="muted">YAML preview</span>
+      <span id="validate-status" class="muted"></span>
+    </div>
+    <pre id="yaml-out"></pre>
+  </aside>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="/ui/static/builder.js"></script>
+</body>
+</html>

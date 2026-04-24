@@ -1,0 +1,53 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: payment-settlement-sla
+  labels:
+    domain: payments
+    criticality: critical
+    sla: t+2min
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+    http:
+      base_url: ${HTTPBIN_URL}
+  data:
+    payments:
+      generator:
+        strategy: faker
+        seed: 2
+        overrides:
+          payment_id: ${uuid()}
+          merchant_id: MCH_${faker.string.alphanumeric(8)}
+          amount_cents: ${faker.number.int(100, 50000)}
+          method: ${faker.helpers.arrayElement(["card","sepa","ach","wallet"])}
+  steps:
+    - name: initiate-20-payments
+      produce:
+        topic: showcase.payments.initiated
+        payload: ${data.payments}
+        count: 20
+    - name: ping-settlement-processor
+      http:
+        method: POST
+        path: /anything
+        headers:
+          X-Settlement-Request: ${run.id}
+        body: '{"batch":"daily","expected":20}'
+        expect:
+          status: 200
+  checks:
+    - name: all_payments_emitted
+      expr: size(stream('showcase.payments.initiated')) >= 20
+      severity: critical
+    - name: amounts_sane
+      expr: stream('showcase.payments.initiated').all(e, e.payload.amount_cents >= 100)
+      severity: critical
+    - name: method_distribution
+      expr: |
+        stream('showcase.payments.initiated').filter(e, e.payload.method == 'card').size() >= 1
+      severity: warning
+    - name: settlement_processor_acked
+      expr: stream('http:/anything').all(e, e.payload.status == 200)
+      severity: critical

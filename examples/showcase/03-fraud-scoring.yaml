@@ -1,0 +1,59 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: fraud-scoring
+  labels:
+    domain: risk
+    criticality: high
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+    http:
+      base_url: ${HTTPBIN_URL}
+  data:
+    transactions:
+      generator:
+        strategy: faker
+        seed: 3
+        overrides:
+          tx_id: ${uuid()}
+          card_hash: ${faker.string.alphanumeric(12)}
+          amount: ${faker.number.float(5, 4500)}
+          country: ${faker.location.countryCode()}
+          device_fingerprint: ${faker.string.hexadecimal(16)}
+  steps:
+    - name: stream-30-transactions
+      produce:
+        topic: showcase.fraud.transactions
+        payload: ${data.transactions}
+        count: 30
+        rate: 50/s
+    - name: probe-fraud-service-availability
+      http:
+        method: GET
+        path: /delay/0
+        expect:
+          status: 200
+    - name: score-batch
+      http:
+        method: POST
+        path: /anything
+        body: '{"model":"fraud-v3","batch_size":30}'
+        expect:
+          status: 200
+  checks:
+    - name: all_tx_produced
+      expr: size(stream('showcase.fraud.transactions')) == 30
+      severity: critical
+    - name: tx_ids_unique
+      expr: |
+        stream('showcase.fraud.transactions').map(e, e.payload.tx_id).size() == 30
+      severity: critical
+    - name: high_value_tx_present
+      expr: |
+        stream('showcase.fraud.transactions').filter(e, e.payload.amount >= 1000).size() >= 1
+      severity: info
+    - name: fraud_service_healthy
+      expr: size(stream('http:/delay/0')) >= 1
+      severity: critical
