@@ -29,8 +29,11 @@ import {
   type SchemaRegistryConfig,
   type Severity,
   type SlowMode,
+  type SSEStep,
   type Spec,
   type Step,
+  type WebSocketConnector,
+  type WebSocketStep,
 } from "./types.js";
 
 // --- camelCase input shapes (user-facing) ----------------------------------
@@ -78,6 +81,27 @@ export interface HTTPStepOptions {
   failMode?: FailMode;
 }
 
+export interface WebSocketOptions {
+  auth?: HTTPAuth;
+}
+
+export interface WebSocketStepOptions {
+  path: string;
+  send?: string;
+  count?: number;
+  timeout?: string;
+  match?: Array<string | MatchRule>;
+  slowMode?: { pauseEvery: number; pauseFor: string };
+}
+
+export interface SSEStepOptions {
+  path: string;
+  count?: number;
+  timeout?: string;
+  match?: Array<string | MatchRule>;
+  slowMode?: { pauseEvery: number; pauseFor: string };
+}
+
 export interface CheckOptions {
   window?: string;
   severity?: Severity;
@@ -97,6 +121,7 @@ export class ScenarioBuilder {
   private labels: Record<string, string> = {};
   private kafkaConn?: KafkaConnector;
   private httpConn?: HTTPConnector;
+  private wsConn?: WebSocketConnector;
   private dataDefs: Record<string, Data> = {};
   private steps: Step[] = [];
   private checks: Check[] = [];
@@ -124,6 +149,11 @@ export class ScenarioBuilder {
 
   http(baseURL: string, opts: HTTPOptions = {}): this {
     this.httpConn = { base_url: baseURL, auth: opts.auth };
+    return this;
+  }
+
+  websocket(baseURL: string, opts: WebSocketOptions = {}): this {
+    this.wsConn = { base_url: baseURL, auth: opts.auth };
     return this;
   }
 
@@ -180,6 +210,45 @@ export class ScenarioBuilder {
     return this;
   }
 
+  wsStep(stepName: string, opts: WebSocketStepOptions): this {
+    const match: MatchRule[] | undefined = opts.match?.map((m) =>
+      typeof m === "string" ? { key: m } : m,
+    );
+    const slow: SlowMode | undefined = opts.slowMode && {
+      pause_every: opts.slowMode.pauseEvery,
+      pause_for: opts.slowMode.pauseFor,
+    };
+    const websocket: WebSocketStep = {
+      path: opts.path,
+      send: opts.send,
+      count: opts.count,
+      timeout: opts.timeout,
+      match,
+      slow_mode: slow,
+    };
+    this.steps.push({ name: stepName, websocket });
+    return this;
+  }
+
+  sseStep(stepName: string, opts: SSEStepOptions): this {
+    const match: MatchRule[] | undefined = opts.match?.map((m) =>
+      typeof m === "string" ? { key: m } : m,
+    );
+    const slow: SlowMode | undefined = opts.slowMode && {
+      pause_every: opts.slowMode.pauseEvery,
+      pause_for: opts.slowMode.pauseFor,
+    };
+    const sse: SSEStep = {
+      path: opts.path,
+      count: opts.count,
+      timeout: opts.timeout,
+      match,
+      slow_mode: slow,
+    };
+    this.steps.push({ name: stepName, sse });
+    return this;
+  }
+
   sleep(stepName: string, duration: string): this {
     this.steps.push({ name: stepName, sleep: duration });
     return this;
@@ -215,6 +284,7 @@ export class ScenarioBuilder {
       connectors: {
         kafka: this.kafkaConn,
         http: this.httpConn,
+        websocket: this.wsConn,
       },
       data: Object.keys(this.dataDefs).length ? this.dataDefs : undefined,
       steps: this.steps,

@@ -33,6 +33,12 @@ export interface Spec {
 export interface Connectors {
   kafka?: KafkaConnector;
   http?: HTTPConnector;
+  websocket?: WebSocketConnector;
+}
+
+export interface WebSocketConnector {
+  base_url: string;
+  auth?: HTTPAuth;
 }
 
 export interface KafkaConnector {
@@ -110,7 +116,26 @@ export interface Step {
   produce?: ProduceStep;
   consume?: ConsumeStep;
   http?: HTTPStep;
+  websocket?: WebSocketStep;
+  sse?: SSEStep;
   sleep?: string;
+}
+
+export interface WebSocketStep {
+  path: string;
+  send?: string;
+  count?: number;
+  timeout?: string;
+  match?: MatchRule[];
+  slow_mode?: SlowMode;
+}
+
+export interface SSEStep {
+  path: string;
+  count?: number;
+  timeout?: string;
+  match?: MatchRule[];
+  slow_mode?: SlowMode;
 }
 
 export type FailMode =

@@ -9,3 +9,5 @@
 - `scenario(name)` fluent `ScenarioBuilder` with camelCase API
 - `edt-ts compile` CLI — compile TS scenario files to YAML
 - Round-trip test suite against the `edt validate` binary
+- WebSocket connector + `wsStep()` builder
+- `sseStep()` builder for Server-Sent Events on the HTTP connector

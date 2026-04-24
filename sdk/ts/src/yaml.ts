@@ -25,9 +25,10 @@ const KEY_ORDER: Record<string, string[]> = {
     "agent_under_test",
     "evals",
   ],
-  connectors: ["kafka", "http"],
+  connectors: ["kafka", "http", "websocket"],
   kafka: ["bootstrap_servers", "auth", "schema_registry"],
   http: ["base_url", "auth"],
+  websocket: ["base_url", "auth"],
   schema_registry: [
     "url",
     "flavor",
@@ -36,7 +37,9 @@ const KEY_ORDER: Record<string, string[]> = {
     "password",
     "bearer_token",
   ],
-  step: ["name", "produce", "consume", "http", "sleep"],
+  step: ["name", "produce", "consume", "http", "websocket", "sse", "sleep"],
+  wsStep: ["path", "send", "count", "timeout", "match", "slow_mode"],
+  sseStep: ["path", "count", "timeout", "match", "slow_mode"],
   produce: [
     "topic",
     "key",
@@ -142,6 +145,7 @@ function childOrderFor(parent: string, key: string): string {
     case "connectors":
       if (key === "kafka") return "kafka";
       if (key === "http") return "http";
+      if (key === "websocket") return "websocket";
       return "";
     case "kafka":
       if (key === "schema_registry") return "schema_registry";
@@ -150,6 +154,8 @@ function childOrderFor(parent: string, key: string): string {
       if (key === "produce") return "produce";
       if (key === "consume") return "consume";
       if (key === "http") return "httpStep";
+      if (key === "websocket") return "wsStep";
+      if (key === "sse") return "sseStep";
       return "";
     case "evaluation":
       if (key === "judge") return "judge";

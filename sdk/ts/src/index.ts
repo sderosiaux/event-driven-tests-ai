@@ -11,4 +11,7 @@ export {
   type HTTPStepOptions,
   type KafkaOptions,
   type ProduceOptions,
+  type SSEStepOptions,
+  type WebSocketOptions,
+  type WebSocketStepOptions,
 } from "./builder.js";

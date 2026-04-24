@@ -88,4 +88,42 @@ describe("scenario builder", () => {
   it("rejects empty scenario name", () => {
     expect(() => scenario("")).toThrow(/name is required/);
   });
+
+  it("websocket + wsStep builders translate camelCase to wire YAML", () => {
+    const s = scenario("ws-demo")
+      .websocket("wss://api.example.com", { auth: { type: "bearer", token: "tok" } })
+      .wsStep("watch", {
+        path: "/orders/stream",
+        send: `{"subscribe":"orders"}`,
+        timeout: "5s",
+        match: ["payload.orderId == 'abc'"],
+        slowMode: { pauseEvery: 10, pauseFor: "200ms" },
+      })
+      .build();
+
+    expect(s.spec.connectors.websocket?.base_url).toBe("wss://api.example.com");
+    const ws = s.spec.steps[0]?.websocket;
+    expect(ws?.path).toBe("/orders/stream");
+    expect(ws?.slow_mode).toEqual({ pause_every: 10, pause_for: "200ms" });
+    expect(ws?.match).toEqual([{ key: "payload.orderId == 'abc'" }]);
+  });
+
+  it("sseStep builder emits under connectors.http", () => {
+    const s = scenario("sse-demo")
+      .http("https://api.example.com")
+      .sseStep("watch", {
+        path: "/events",
+        count: 5,
+        timeout: "10s",
+        match: ["payload.type == 'order.placed'"],
+      })
+      .build();
+
+    const sse = s.spec.steps[0]?.sse;
+    expect(sse?.path).toBe("/events");
+    expect(sse?.count).toBe(5);
+    expect(sse?.match).toEqual([{ key: "payload.type == 'order.placed'" }]);
+    // SSE reuses the HTTP connector — there should be no websocket connector.
+    expect(s.spec.connectors.websocket).toBeUndefined();
+  });
 });

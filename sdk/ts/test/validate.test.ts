@@ -96,6 +96,32 @@ describe("round-trip against edt validate", () => {
           .build(),
     ],
     [
+      "websocket step",
+      () =>
+        scenario("ws-step")
+          .websocket("wss://api.example.com")
+          .wsStep("watch", {
+            path: "/orders/stream",
+            send: `{"subscribe":"orders"}`,
+            timeout: "5s",
+            match: ["payload.orderId == 'abc'"],
+          })
+          .build(),
+    ],
+    [
+      "sse step on http connector",
+      () =>
+        scenario("sse-step")
+          .http("https://api.example.com")
+          .sseStep("watch", {
+            path: "/events",
+            count: 10,
+            timeout: "5s",
+            match: ["payload.type == 'alert'"],
+          })
+          .build(),
+    ],
+    [
       "checks + labels",
       () =>
         scenario("checks")
