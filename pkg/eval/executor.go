@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,13 +41,15 @@ func (c *Config) defaults() {
 
 // Result summarises the aggregate for one eval across all iterations.
 type Result struct {
-	Eval      string  `json:"eval"`
-	Aggregate string  `json:"aggregate"`
-	Over      int     `json:"over_samples"`
-	Value     float64 `json:"value"`
-	Threshold string  `json:"threshold,omitempty"`
-	Passed    bool    `json:"passed"`
-	Errors    int     `json:"errors"`
+	Eval         string  `json:"eval"`
+	Aggregate    string  `json:"aggregate"`
+	Over         int     `json:"over_samples"`
+	RequiredOver int     `json:"required_samples,omitempty"` // from scenario.threshold.over "<N> runs"
+	Value        float64 `json:"value"`
+	Threshold    string  `json:"threshold,omitempty"`
+	Passed       bool    `json:"passed"`
+	Status       string  `json:"status"` // pass | fail | insufficient_samples | judge_errors
+	Errors       int     `json:"errors"`
 }
 
 // Executor drives the eval harness. Use Run for a canned loop, or call
@@ -124,9 +128,9 @@ func (e *Executor) Finalize(s *scenario.Scenario) []Result {
 		}
 		if ev.Threshold != nil {
 			r.Threshold = ev.Threshold.Value
-			passed, err := CheckThreshold(a.Value(), ev.Threshold.Value)
-			r.Passed = err == nil && passed
+			r.RequiredOver = parseMinSamples(ev.Threshold.Over)
 		}
+		r.Passed, r.Status = finalizeStatus(r, ev)
 		out = append(out, r)
 	}
 	return out
@@ -206,8 +210,16 @@ func waitForOutput(ctx context.Context, store events.Store, streams []string, ke
 	}
 }
 
-// asMap normalises a payload to map[string]any. JSON-encoded strings are
-// decoded best-effort; non-map scalars are wrapped under "_value".
+// maxPreviewLen bounds how much untrusted text from a malformed payload gets
+// forwarded into the LLM prompt. A hostile producer who ships MB-sized
+// payloads cannot burn our context budget or use the payload as a Trojan
+// for prompt-injection at this size.
+const maxPreviewLen = 512
+
+// asMap normalises a payload to map[string]any. Well-formed JSON maps pass
+// through; anything else is wrapped with _raw or _value but truncated and
+// fingerprinted so the judge sees "untrusted opaque bytes" rather than
+// arbitrary attacker-controlled prose.
 func asMap(v any) map[string]any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -217,15 +229,99 @@ func asMap(v any) map[string]any {
 		if err := json.Unmarshal(t, &out); err == nil {
 			return out
 		}
-		return map[string]any{"_raw": string(t)}
+		return untrustedBlob("_raw", string(t))
 	case string:
 		var out map[string]any
 		if err := json.Unmarshal([]byte(t), &out); err == nil {
 			return out
 		}
-		return map[string]any{"_value": t}
+		return untrustedBlob("_value", t)
 	}
 	return map[string]any{"_value": v}
+}
+
+// untrustedBlob replaces a raw payload with a preview-safe map: the first
+// maxPreviewLen bytes (JSON-quoted), the byte length, and a sha256 prefix
+// so two identical corrupt payloads collapse to the same fingerprint.
+func untrustedBlob(field, text string) map[string]any {
+	preview := text
+	truncated := false
+	if len(preview) > maxPreviewLen {
+		preview = preview[:maxPreviewLen]
+		truncated = true
+	}
+	// Escape every byte that would look like an instruction in the prompt
+	// (angle brackets, backticks, code fences). json.Marshal handles quoting.
+	encoded, _ := json.Marshal(preview)
+	return map[string]any{
+		field:         string(encoded), // always a quoted JSON literal
+		"_bytes":      len(text),
+		"_truncated":  truncated,
+		"_fingerprint": fingerprint(text),
+		"_untrusted":  true,
+	}
+}
+
+func fingerprint(text string) string {
+	sum := sha256Prefix([]byte(text))
+	return "sha256:" + sum
+}
+
+// parseMinSamples extracts the numeric target from a scenario.threshold.over
+// expression like "50 runs". Returns 0 when absent or unparseable — a 0
+// required-count degrades gracefully to "no minimum". Duration-based "over"
+// ("1h", "5m") is out of scope for this helper and is ignored (returns 0).
+func parseMinSamples(over string) int {
+	over = strings.TrimSpace(strings.ToLower(over))
+	if over == "" {
+		return 0
+	}
+	// Split on whitespace; first field is the number, second (if any) is the unit.
+	fields := strings.Fields(over)
+	if len(fields) == 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(fields[0])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	// Only the "runs" / "samples" unit is honoured as a hard minimum. A
+	// duration expression ("1h") is observational only — a watch-mode
+	// scheduler knows about wall-clock; the eval executor does not.
+	if len(fields) > 1 {
+		unit := fields[1]
+		if unit != "runs" && unit != "samples" && unit != "run" && unit != "sample" {
+			return 0
+		}
+	}
+	return n
+}
+
+// finalizeStatus decides the eval's pass/fail posture. It folds three signals
+// that used to be lost: observed sample count vs required, judge-error count,
+// and the threshold comparison. A threshold is only tested after the
+// minimum-samples gate and the all-errors gate have passed.
+func finalizeStatus(r Result, ev scenario.Eval) (bool, string) {
+	// All observations errored → eval cannot be judged.
+	if r.Over == 0 && r.Errors > 0 {
+		return false, "judge_errors"
+	}
+	// No samples at all → nothing to judge.
+	if r.Over == 0 {
+		return false, "insufficient_samples"
+	}
+	// Explicit minimum declared, not reached.
+	if r.RequiredOver > 0 && r.Over < r.RequiredOver {
+		return false, "insufficient_samples"
+	}
+	if ev.Threshold == nil || ev.Threshold.Value == "" {
+		return true, "pass"
+	}
+	passed, err := CheckThreshold(r.Value, ev.Threshold.Value)
+	if err != nil || !passed {
+		return false, "fail"
+	}
+	return true, "pass"
 }
 
 // Silence unused-import lint if scenario types shift away from orchestrator
