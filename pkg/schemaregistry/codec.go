@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // magicByte is the leading byte of the Confluent wire format. Apicurio in CC
@@ -38,22 +39,38 @@ func ParseHeader(data []byte) (id int, body []byte, err error) {
 
 // Codec encodes and decodes payloads according to a schema fetched from the
 // registry. One instance is bound to one Client; concurrent use is safe.
+//
+// The per-subject cache carries a TTL so "latest" can refresh when the
+// registry advances that subject mid-run. The per-id cache is immutable —
+// an id always resolves to the same schema body.
 type Codec struct {
 	cli   *Client
+	ttl   time.Duration
 	mu    sync.RWMutex
-	byID  map[int]formatHandler // schema-id → handler cache for decode
-	bySub map[string]idAndType   // subject → cached id+type for encode
+	byID  map[int]formatHandler // schema-id → handler (immutable)
+	bySub map[string]idAndType  // subject → cached id+type+expiry for encode
 }
 
 type idAndType struct {
 	id      int
 	handler formatHandler
+	expires time.Time // zero = never expires
 }
 
+// DefaultLatestTTL is how long the "latest" pointer for a subject stays cached
+// before we re-query the registry. 30s balances "agent iterates fast" against
+// "registry gets hammered". Override via NewCodecWithTTL when needed.
+const DefaultLatestTTL = 30 * time.Second
+
 // NewCodec builds a Codec on top of the given Client.
-func NewCodec(c *Client) *Codec {
+func NewCodec(c *Client) *Codec { return NewCodecWithTTL(c, DefaultLatestTTL) }
+
+// NewCodecWithTTL is NewCodec with an explicit TTL for subject→latest cache
+// entries. Set ttl to 0 to keep the entry forever (useful for tests).
+func NewCodecWithTTL(c *Client, ttl time.Duration) *Codec {
 	return &Codec{
 		cli:   c,
+		ttl:   ttl,
 		byID:  make(map[int]formatHandler),
 		bySub: make(map[string]idAndType),
 	}
@@ -100,12 +117,13 @@ func (c *Codec) Decode(ctx context.Context, data []byte) (any, error) {
 }
 
 func (c *Codec) handlerForSubject(ctx context.Context, subject string) (idAndType, error) {
+	now := time.Now()
 	c.mu.RLock()
-	if entry, ok := c.bySub[subject]; ok {
-		c.mu.RUnlock()
+	entry, ok := c.bySub[subject]
+	c.mu.RUnlock()
+	if ok && (entry.expires.IsZero() || now.Before(entry.expires)) {
 		return entry, nil
 	}
-	c.mu.RUnlock()
 
 	schema, err := c.cli.GetLatestVersion(ctx, subject)
 	if err != nil {
@@ -115,13 +133,16 @@ func (c *Codec) handlerForSubject(ctx context.Context, subject string) (idAndTyp
 	if err != nil {
 		return idAndType{}, err
 	}
-	entry := idAndType{id: schema.ID, handler: h}
+	fresh := idAndType{id: schema.ID, handler: h}
+	if c.ttl > 0 {
+		fresh.expires = now.Add(c.ttl)
+	}
 
 	c.mu.Lock()
-	c.bySub[subject] = entry
+	c.bySub[subject] = fresh
 	c.byID[schema.ID] = h
 	c.mu.Unlock()
-	return entry, nil
+	return fresh, nil
 }
 
 func (c *Codec) handlerForID(ctx context.Context, id int) (formatHandler, error) {

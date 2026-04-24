@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -97,7 +98,7 @@ func (c *Client) GetLatestVersion(ctx context.Context, subject string) (Schema, 
 		Schema     string     `json:"schema"`
 		SchemaType SchemaType `json:"schemaType,omitempty"`
 	}
-	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/subjects/%s/versions/latest", subject), nil, &raw); err != nil {
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/subjects/%s/versions/latest", url.PathEscape(subject)), nil, &raw); err != nil {
 		return Schema{}, err
 	}
 	if raw.SchemaType == "" {
@@ -117,7 +118,7 @@ func (c *Client) RegisterSchema(ctx context.Context, subject, schema string, t S
 	var raw struct {
 		ID int `json:"id"`
 	}
-	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/subjects/%s/versions", subject), body, &raw); err != nil {
+	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/subjects/%s/versions", url.PathEscape(subject)), body, &raw); err != nil {
 		return 0, err
 	}
 	return raw.ID, nil
@@ -134,7 +135,7 @@ func (c *Client) CheckCompatibility(ctx context.Context, subject, schema string,
 	var raw struct {
 		IsCompatible bool `json:"is_compatible"`
 	}
-	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/compatibility/subjects/%s/versions/latest", subject), body, &raw); err != nil {
+	if err := c.do(ctx, http.MethodPost, fmt.Sprintf("/compatibility/subjects/%s/versions/latest", url.PathEscape(subject)), body, &raw); err != nil {
 		return false, err
 	}
 	return raw.IsCompatible, nil
