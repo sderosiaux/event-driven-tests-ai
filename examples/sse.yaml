@@ -1,0 +1,32 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: sse-notifications
+  labels:
+    env: local
+spec:
+  connectors:
+    http:
+      base_url: https://notifications.example.com
+      auth:
+        type: bearer
+        token: ${SSE_TOKEN}
+  steps:
+    - name: watch-alert-stream
+      sse:
+        path: /v1/events
+        count: 50
+        timeout: 2m
+        match:
+          - key: payload.severity == 'critical'
+        slow_mode:
+          pause_every: 10
+          pause_for: 100ms
+  checks:
+    - name: critical_alert_observed
+      expr: size(stream('sse:/v1/events')) >= 1
+      severity: critical
+    - name: at_most_one_critical_per_batch
+      expr: |
+        stream('sse:/v1/events').filter(e, e.payload.severity == 'critical').size() <= 5
+      severity: warning

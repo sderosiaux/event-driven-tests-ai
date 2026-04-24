@@ -1,0 +1,45 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: grpc-health-probe
+  labels:
+    env: local
+spec:
+  connectors:
+    grpc:
+      address: api.example.com:443
+      tls: true
+      auth:
+        type: bearer
+        token: ${GRPC_TOKEN}
+  steps:
+    - name: probe-payment-service
+      grpc:
+        # Inline the standard gRPC health protocol so no generated stubs are needed.
+        # See https://github.com/grpc/grpc/blob/master/doc/health-checking.md
+        proto: |
+          syntax = "proto3";
+          package grpc.health.v1;
+          message HealthCheckRequest { string service = 1; }
+          message HealthCheckResponse {
+            enum ServingStatus {
+              UNKNOWN = 0;
+              SERVING = 1;
+              NOT_SERVING = 2;
+              SERVICE_UNKNOWN = 3;
+            }
+            ServingStatus status = 1;
+          }
+          service Health {
+            rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+          }
+        method: grpc.health.v1.Health/Check
+        request: '{"service":"payments"}'
+        expect:
+          code: 0
+          body:
+            status: SERVING
+  checks:
+    - name: payment_service_serving
+      expr: stream('grpc:grpc.health.v1.Health/Check').all(e, e.payload.code == 0)
+      severity: critical

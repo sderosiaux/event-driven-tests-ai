@@ -171,6 +171,7 @@ func (s *Server) routes() {
 	s.router.Handle("/ui/static/*", staticHandler)
 	s.router.Get("/", s.serveIndex)
 	s.router.Get("/ui/runs", s.serveIndex)
+	s.router.Get("/ui/evals", s.serveIndex)
 	s.router.Get("/ui/workers", s.serveIndex)
 }
 

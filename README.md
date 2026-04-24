@@ -159,20 +159,31 @@ The control plane exposes:
 
 - `POST /api/v1/scenarios` — version-controlled scenario store
 - `GET /api/v1/runs?scenario=…` — last N runs for any scenario
+- `GET /api/v1/eval-runs?scenario=…` — LLM-as-judge eval results per run
 - `GET /api/v1/scenarios/{name}/slo?window=1h` — pass-rate per check
 - `GET /metrics` — Prometheus scrape target (workers push, control plane exposes)
-- `POST /mcp` — JSON-RPC MCP server for Claude Desktop / Claude Code / Cursor
-- Embedded web UI at `/` — scenarios, runs, workers, no build step
+- `POST /mcp` — JSON-RPC MCP server for Claude Desktop / Claude Code / Cursor, read-only by default with an opt-in write policy for `upsert_scenario` / `assign_scenario`
+- Embedded web UI at `/` — scenarios, runs, evals, workers, no build step
 
 ## What's supported today
 
-- Kafka produce + consume (franz-go): SASL PLAIN, SCRAM-256/512, mTLS, OAUTHBEARER, AWS IAM
-- HTTP connector with bearer/basic auth and matchers (`in`, `regex`, `gt`, `lt`)
-- Schema Registry (Confluent + Apicurio compat mode): Avro and JSON Schema
-- CEL-based check expressions with streaming operators: `stream`, `latency`, `percentile`, `rate`, `before`, `forall`/`exists` via CEL macros
+Connectors:
+
+- **Kafka** (franz-go): SASL PLAIN, SCRAM-256/512, mTLS, OAUTHBEARER, AWS IAM (static keys or default SDK credential chain — IRSA, EC2 IMDS, ECS task role)
+- **HTTP** with bearer/basic auth and matchers (`in`, `regex`, `gt`, `lt`)
+- **WebSocket** (`connectors.websocket`, `step.websocket`): initial-send frame, CEL match rules, slow_mode, count bound — [example](examples/websocket.yaml)
+- **SSE** (`step.sse` on the HTTP connector): event-stream parser with JSON + raw-text fallback — [example](examples/sse.yaml)
+- **gRPC** unary (`connectors.grpc`, `step.grpc`): inline `.proto` source → dynamicpb invoke, no generated stubs needed — [example](examples/grpc.yaml)
+
+Scenario authoring:
+
+- Canonical YAML DSL (`apiVersion: edt.io/v1`) — [the full schema reflects through `edt validate`](cmd/edt/validate.go)
+- TypeScript SDK (`@event-driven-tests-ai/sdk`) with fluent builder + `edt-ts compile` CLI
+- Schema Registry (Confluent + Apicurio compat mode): Avro, JSON Schema, and Protobuf (inline `.proto` text; SR references land in M7)
+- CEL-based checks with streaming operators: `stream`, `latency`, `percentile`, `rate`, `before`, `forall`/`exists`
 - Faker-style data generation with seeded determinism
 - Failure injection: `fail_rate`, `fail_mode` (timeout, schema violation, broker unavailable), slow consumers
-- `${run.id}` / `${previous.*}` interpolation across topic, group, path, body
+- `${run.id}` / `${previous.*}` interpolation across topic, group, path, body, gRPC request
 
 ## Status
 
@@ -186,7 +197,7 @@ Near-term: TypeScript SDK (scenarios as typed code that compiles to YAML), Helm 
 
 Issues and PRs welcome. If you have a streaming testing pain we don't cover yet, open an issue describing the scenario. That's the most useful signal. Drive-by fixes are great too; we don't require DCO or CLA for small changes.
 
-Design docs live in [`docs/plans/`](docs/plans/). They're the source of truth for what each milestone tried to solve and why.
+Open work is tracked in [`TODO.md`](TODO.md); pick any item and open a PR.
 
 ## License
 

@@ -78,7 +78,7 @@ func TestUIIndexServesEmbeddedHTML(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	for _, path := range []string{"/", "/ui/runs", "/ui/workers"} {
+	for _, path := range []string{"/", "/ui/runs", "/ui/evals", "/ui/workers"} {
 		resp, err := http.Get(srv.URL + path)
 		require.NoError(t, err, path)
 		body, _ := io.ReadAll(resp.Body)

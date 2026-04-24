@@ -36,7 +36,7 @@ go test -tags=integration ./...
 - Tests required for any non-trivial change. TDD preferred; red-then-green beats "I tested it manually".
 - Keep the commit message descriptive. We use Conventional Commits loosely (`feat:`, `fix:`, `chore:`, `docs:`) but don't police the exact shape.
 - Run `go vet ./...` and `go test ./... -race` locally before pushing.
-- Design docs in `docs/plans/` are the source of truth for what a milestone tried to solve. If you're changing something fundamental, update the relevant plan in the same PR.
+- Open work is tracked in [`TODO.md`](TODO.md) — pick an item from there or propose a new one in an issue first.
 
 ## Code style
 

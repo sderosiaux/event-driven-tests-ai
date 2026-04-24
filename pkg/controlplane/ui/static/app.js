@@ -1,4 +1,4 @@
-// Minimal vanilla SPA — three views, no build step. The control plane API is
+// Minimal vanilla SPA — four views, no build step. The control plane API is
 // the source of truth; this file is a thin renderer.
 
 const app = document.getElementById('app');
@@ -28,6 +28,7 @@ async function refreshHealth() {
 const routes = {
   '/': renderScenarios,
   '/ui/runs': renderRuns,
+  '/ui/evals': renderEvalRuns,
   '/ui/workers': renderWorkers,
 };
 
@@ -71,6 +72,30 @@ async function renderRuns() {
       <td class="muted">${escape(r.mode)}</td>
       <td class="muted">${fmt(r.started_at)}</td>
       <td class="muted">${(r.duration_ns / 1e9).toFixed(2)}s</td>
+      <td class="muted">${escape(r.id)}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function renderEvalRuns() {
+  const runs = await fetchJSON('/api/v1/eval-runs?limit=50');
+  if (!runs.length) {
+    app.innerHTML = `<div class="empty">
+      <h2>No eval runs yet</h2>
+      <p>Run <code>edt eval --file scenario.yaml --report-to ${location.origin}</code> against a scenario that declares an <code>agent_under_test</code> block.</p>
+    </div>`;
+    return;
+  }
+  app.innerHTML = `<table>
+    <thead><tr><th>Status</th><th>Scenario</th><th>Judge</th><th>Iters</th><th>Started</th><th>Run id</th></tr></thead>
+    <tbody>
+    ${runs.map(r => `<tr>
+      <td class="status-${r.status}">${r.status.toUpperCase()}</td>
+      <td>${escape(r.scenario)}</td>
+      <td class="muted">${escape(r.judge_model || 'mixed')}</td>
+      <td class="muted">${r.iterations}</td>
+      <td class="muted">${fmt(r.started_at)}</td>
       <td class="muted">${escape(r.id)}</td>
     </tr>`).join('')}
     </tbody>

@@ -19,6 +19,16 @@ jobs:
         run: go build ./...
       - name: Test
         run: go test ./... -race -count=1
+      - name: Validate every example scenario
+        run: |
+          go build -o /tmp/edt ./cmd/edt
+          set -e
+          # Non-scenario YAML (docker-compose, helm values) is named differently;
+          # examples/*.yaml and examples/demo/scenario.yaml are the scenario set.
+          for f in examples/*.yaml examples/demo/scenario.yaml; do
+            echo "--- $f"
+            /tmp/edt validate --file "$f"
+          done
 
   sdk-ts:
     runs-on: ubuntu-latest

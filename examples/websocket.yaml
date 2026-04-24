@@ -1,0 +1,25 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: websocket-order-stream
+  labels:
+    env: local
+spec:
+  connectors:
+    websocket:
+      base_url: wss://stream.example.com
+      auth:
+        type: bearer
+        token: ${WS_TOKEN}
+  steps:
+    - name: subscribe-and-wait-for-match
+      websocket:
+        path: /orders/stream
+        send: '{"subscribe":["orders.placed","orders.shipped"]}'
+        timeout: 30s
+        match:
+          - key: payload.event_type == 'orders.shipped' && payload.order_id != ''
+  checks:
+    - name: shipped_event_observed
+      expr: size(stream('ws:/orders/stream')) >= 1
+      severity: critical
