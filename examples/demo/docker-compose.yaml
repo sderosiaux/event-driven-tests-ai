@@ -66,9 +66,21 @@ services:
         condition: service_healthy
     volumes:
       - ../showcase:/etc/edt/showcase:ro
+    healthcheck:
+      # The edt binary doubles as its own probe — `validate --file` with a
+      # seeded scenario proves the process is up AND the seed dir is mounted.
+      # Avoids shelling out to curl/wget (not present in the distroless
+      # runtime image).
+      test: ["CMD", "/usr/local/bin/edt", "validate", "--file", "/etc/edt/showcase/01-ecommerce-checkout.yaml"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   # One-shot: run each showcase scenario against the real stack so the
   # /ui/runs table has real data the moment the user opens the UI.
+  # Uses the edt `batch-run` subcommand so no shell is needed in the
+  # distroless image.
   edt-seed-runs:
     <<: *edt-build
     command:
@@ -80,7 +92,7 @@ services:
       HTTPBIN_URL: http://httpbin
     depends_on:
       edt-cp:
-        condition: service_started
+        condition: service_healthy
       redpanda:
         condition: service_healthy
       httpbin:
@@ -97,5 +109,5 @@ services:
       - --labels=env=demo,pool=showcase
     depends_on:
       edt-cp:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped

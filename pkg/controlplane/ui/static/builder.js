@@ -41,13 +41,24 @@ const TEMPLATES = {
 // YAML the scenario shape actually uses: maps, arrays, scalars, block scalars
 // for multi-line strings (protos, CEL).
 
+// YAML 1.1 reserved scalars that would reparse as booleans / numbers / null.
+// Quote any match so JSON-like data survives a YAML→JSON round-trip.
+const YAML_RESERVED = /^(?:true|false|null|yes|no|on|off|~)$/i;
+// Any finite JS-parseable number (including negatives, hex, octal, exponents)
+// must be quoted when the string was authored as text, so `level: "5"`
+// doesn't round-trip to int.
+function looksNumeric(s) {
+  if (s === '' || /\s/.test(s)) return false;
+  return Number.isFinite(Number(s));
+}
 function yamlEscape(s) {
   s = String(s);
   if (s === '') return '""';
-  if (/^(true|false|null|~|\d+(\.\d+)?)$/i.test(s)) return `"${s}"`;
-  if (/[:#@`\[\]{}|>*&!%,]|^-|^\?/.test(s) || s.includes('\n')) {
+  if (YAML_RESERVED.test(s)) return JSON.stringify(s);
+  if (looksNumeric(s)) return JSON.stringify(s);
+  if (s !== s.trim()) return JSON.stringify(s); // leading/trailing whitespace
+  if (/[:#@`\[\]{}|>*&!%,]|^-|^\?|^:/.test(s) || s.includes('\n')) {
     if (s.includes('\n')) {
-      // Block scalar.
       return '|-\n' + s.split('\n').map(l => '  ' + l).join('\n');
     }
     return JSON.stringify(s);
@@ -67,14 +78,30 @@ function emitValue(v, indent) {
   }
   if (Array.isArray(v)) {
     if (v.length === 0) return '[]';
+    // Emit each element as a block: inline scalars with "- v", and emit
+    // nested maps/arrays by rendering child keys directly under "- " at
+    // indent+1. Avoids the old slice-based reindent which was fragile when
+    // the child started with an array or a multi-line block scalar.
     return '\n' + v.map(item => {
-      const rendered = emitValue(item, indent + 1);
-      if (rendered.startsWith('\n')) {
-        // Nested map — inline the first line with "- ", indent the rest.
-        const lines = rendered.slice(1).split('\n');
-        return pad + '- ' + lines[0].slice(pad.length + 2) + '\n' + lines.slice(1).join('\n');
+      if (item === null || item === undefined || typeof item !== 'object') {
+        return pad + '- ' + emitValue(item, indent + 1);
       }
-      return pad + '- ' + rendered;
+      if (Array.isArray(item)) {
+        // Array-of-array: rare in scenarios, but emit correctly anyway.
+        const rendered = emitValue(item, indent + 2);
+        return pad + '-' + rendered;
+      }
+      const keys = Object.keys(item);
+      if (keys.length === 0) return pad + '- {}';
+      // "- key: value" on the first line, then indent the rest by indent+1.
+      const childPad = '  '.repeat(indent + 1);
+      const lines = keys.map((k, i) => {
+        const rendered = emitValue(item[k], indent + 2);
+        const prefix = i === 0 ? pad + '- ' : childPad;
+        if (rendered.startsWith('\n')) return prefix + k + ':' + rendered;
+        return prefix + k + ': ' + rendered;
+      });
+      return lines.join('\n');
     }).join('\n');
   }
   if (typeof v === 'object') {

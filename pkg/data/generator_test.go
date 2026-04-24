@@ -4,6 +4,7 @@ import (
 	mrand "math/rand"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/data"
 	"github.com/stretchr/testify/assert"
@@ -124,4 +125,86 @@ func TestCustomHelper(t *testing.T) {
 	out, err := g.Generate()
 	require.NoError(t, err)
 	assert.Equal(t, 42, out["a"])
+}
+
+// Codex 2026-04-24: new helpers landed for the showcase scenarios.
+func TestArrayElementPicksFromEachValue(t *testing.T) {
+	reg := data.NewRegistry()
+	reg.RegisterDefaults()
+	g := data.NewFakerGenerator(reg, 42, map[string]string{
+		"v": `${faker.helpers.arrayElement(["A","B","C"])}`,
+	})
+	counts := map[string]int{}
+	for i := 0; i < 120; i++ {
+		out, err := g.Generate()
+		require.NoError(t, err)
+		counts[out["v"].(string)]++
+	}
+	assert.Greater(t, counts["A"], 0)
+	assert.Greater(t, counts["B"], 0)
+	assert.Greater(t, counts["C"], 0)
+}
+
+// Codex P0 2026-04-24: splitArgs used to strip any outer `[` `]` pair,
+// so a single string containing literal brackets lost them. Scope to
+// faker-array shape only.
+func TestSingleArgWithLiteralBracketsIsPreserved(t *testing.T) {
+	seen := ""
+	reg := data.NewRegistry()
+	reg.Register("capture", func(args []string, _ *mrand.Rand) (any, error) {
+		if len(args) > 0 {
+			seen = args[0]
+		}
+		return "ok", nil
+	})
+	g := data.NewFakerGenerator(reg, 1, map[string]string{
+		"v": `${capture("[literal-brackets]")}`,
+	})
+	_, err := g.Generate()
+	require.NoError(t, err)
+	assert.Equal(t, "[literal-brackets]", seen)
+}
+
+func TestHexadecimalAndNumericHelpers(t *testing.T) {
+	reg := data.NewRegistry()
+	reg.RegisterDefaults()
+	g := data.NewFakerGenerator(reg, 3, map[string]string{
+		"hex": `${faker.string.hexadecimal("8")}`,
+		"num": `${faker.string.numeric("5")}`,
+	})
+	out, err := g.Generate()
+	require.NoError(t, err)
+	hex := out["hex"].(string)
+	num := out["num"].(string)
+	assert.Len(t, hex, 8)
+	assert.Len(t, num, 5)
+	for _, r := range hex {
+		assert.True(t, (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f'))
+	}
+	for _, r := range num {
+		assert.True(t, r >= '0' && r <= '9')
+	}
+}
+
+func TestEmailAndCountryCodeHelpers(t *testing.T) {
+	reg := data.NewRegistry()
+	reg.RegisterDefaults()
+	g := data.NewFakerGenerator(reg, 1, map[string]string{
+		"email":       `${faker.internet.email()}`,
+		"countryCode": `${faker.location.countryCode()}`,
+	})
+	out, err := g.Generate()
+	require.NoError(t, err)
+	assert.Contains(t, out["email"], "@")
+	assert.Len(t, out["countryCode"].(string), 2)
+}
+
+func TestNowReturnsRFC3339(t *testing.T) {
+	reg := data.NewRegistry()
+	reg.RegisterDefaults()
+	g := data.NewFakerGenerator(reg, 1, map[string]string{"ts": `${now()}`})
+	out, err := g.Generate()
+	require.NoError(t, err)
+	_, err = time.Parse(time.RFC3339Nano, out["ts"].(string))
+	require.NoError(t, err)
 }

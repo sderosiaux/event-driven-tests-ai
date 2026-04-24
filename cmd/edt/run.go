@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -234,13 +235,31 @@ func newRunID() string {
 // (with dots, parens, spaces) is left untouched so scenario-level
 // interpolations like ${run.id}, ${uuid()}, ${faker.person.id()} pass
 // through to the orchestrator and data-generator layers.
+// Hand-rolled scanner, not os.Expand: os.Expand also recognises unbraced
+// $VAR syntax, which would silently replace $PATH or $HOME if those literals
+// ever appeared inside a CEL string or payload (codex P1 2026-04-24).
 func expandHostEnv(s string) string {
-	return os.Expand(s, func(key string) string {
-		if !isEnvName(key) {
-			return "${" + key + "}"
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		if i+1 < len(s) && s[i] == '$' && s[i+1] == '{' {
+			end := strings.IndexByte(s[i+2:], '}')
+			if end < 0 {
+				out.WriteString(s[i:])
+				break
+			}
+			key := s[i+2 : i+2+end]
+			if isEnvName(key) {
+				out.WriteString(os.Getenv(key))
+			} else {
+				out.WriteString("${" + key + "}")
+			}
+			i += 2 + end + 1
+			continue
 		}
-		return os.Getenv(key)
-	})
+		out.WriteByte(s[i])
+		i++
+	}
+	return out.String()
 }
 
 func isEnvName(k string) bool {

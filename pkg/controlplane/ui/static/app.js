@@ -93,9 +93,12 @@ async function renderRunDetail(id) {
   const data = await fetchJSON('/api/v1/runs/' + encodeURIComponent(id));
   const run = data.run || {};
   const checks = data.checks || [];
+  // Sanitise status for BOTH the HTML attribute and the text context so a
+  // backend shipping an unexpected value can't break the DOM (codex P1).
+  const safeStatus = escape(run.status || '');
   app.innerHTML = `
     <p><a href="/ui/runs">← Back to runs</a></p>
-    <h2 style="margin:8px 0 16px">${escape(run.scenario)} <span class="status-${run.status}" style="font-size:12px;padding:3px 8px;border-radius:4px;background:var(--bg);border:1px solid var(--border)">${(run.status||'').toUpperCase()}</span></h2>
+    <h2 style="margin:8px 0 16px">${escape(run.scenario)} <span class="status-${safeStatus}" style="font-size:12px;padding:3px 8px;border-radius:4px;background:var(--bg);border:1px solid var(--border)">${safeStatus.toUpperCase()}</span></h2>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px">
       ${kvCard('Run ID', run.id)}
       ${kvCard('Mode', run.mode)}

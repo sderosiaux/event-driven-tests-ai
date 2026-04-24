@@ -13,10 +13,10 @@ import (
 	"fmt"
 	mrand "math/rand"
 	"regexp"
-	"time"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Generator builds a single payload value (typically a map[string]any).
@@ -139,13 +139,17 @@ func (g *FakerGenerator) resolve(expr string) (any, error) {
 
 // splitArgs tokenizes a comma-separated argument list. Double-quoted strings
 // are returned without their surrounding quotes and may contain commas, parens,
-// and escaped quotes (`\"`). Leading `[` and trailing `]` are accepted so
+// and escaped quotes (`\"`).
+//
 // fakerjs-style array literals (`arrayElement(["a","b"])`) tokenize the same
-// as flat arguments (`arrayElement("a","b")`) — otherwise each element would
-// pick up a bracket as part of its string.
+// as flat quoted arguments (`arrayElement("a","b")`): when the raw argument
+// list starts with `["` and ends with `"]`, the outer brackets are stripped
+// so each element parses on its own. We deliberately require the `"` right
+// after `[` (and before `]`) so single-argument strings that happen to
+// contain brackets, e.g. `alphanumeric("[x]")`, are NOT affected.
 func splitArgs(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
+	if isFakerArrayLiteral(raw) {
 		raw = strings.TrimSpace(raw[1 : len(raw)-1])
 	}
 	if raw == "" {
@@ -174,6 +178,21 @@ func splitArgs(raw string) ([]string, error) {
 	}
 	out = append(out, strings.TrimSpace(cur.String()))
 	return out, nil
+}
+
+// isFakerArrayLiteral reports whether raw looks like `["a",...,"z"]` — the
+// shape we strip on behalf of fakerjs users. Requires balanced brackets AND
+// the first element to be double-quoted, so bare tokens and single-string
+// arguments like `"[literal]"` pass through untouched.
+func isFakerArrayLiteral(raw string) bool {
+	if len(raw) < 4 || raw[0] != '[' || raw[len(raw)-1] != ']' {
+		return false
+	}
+	inner := strings.TrimSpace(raw[1 : len(raw)-1])
+	if inner == "" {
+		return false
+	}
+	return inner[0] == '"' && inner[len(inner)-1] == '"'
 }
 
 // ---- Helpers ---------------------------------------------------------------
