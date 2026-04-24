@@ -19,7 +19,11 @@ type jsonHandler struct {
 
 func newJSONHandler(text string) (formatHandler, error) {
 	c := jsonschema.NewCompiler()
-	if err := c.AddResource("schema.json", decodeJSONResource(text)); err != nil {
+	doc, err := decodeJSONResource(text)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.AddResource("schema.json", doc); err != nil {
 		return nil, fmt.Errorf("schemaregistry: add json schema: %w", err)
 	}
 	compiled, err := c.Compile("schema.json")
@@ -51,17 +55,25 @@ func (h *jsonHandler) decode(body []byte) (any, error) {
 
 // decodeJSONResource accepts either a JSON document body or a string-wrapped
 // schema (Confluent SR sometimes ships JSON Schema text inside a JSON string).
-func decodeJSONResource(text string) any {
+func decodeJSONResource(text string) (any, error) {
 	t := strings.TrimSpace(text)
 	if t == "" {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
 	var v any
 	dec := json.NewDecoder(bytes.NewReader([]byte(t)))
 	dec.UseNumber()
 	if err := dec.Decode(&v); err == nil {
-		return v
+		if s, ok := v.(string); ok {
+			var inner any
+			dec := json.NewDecoder(bytes.NewReader([]byte(s)))
+			dec.UseNumber()
+			if err := dec.Decode(&inner); err != nil {
+				return nil, fmt.Errorf("schemaregistry: unwrap json schema string: %w", err)
+			}
+			return inner, nil
+		}
+		return v, nil
 	}
-	// Fallback: treat as raw text.
-	return map[string]any{"$ref": t}
+	return nil, fmt.Errorf("schemaregistry: invalid json schema resource")
 }

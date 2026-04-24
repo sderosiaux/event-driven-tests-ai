@@ -140,3 +140,30 @@ func TestExecutorOnScoreStreamsVerdicts(t *testing.T) {
 	assert.Len(t, streamed, 1)
 	assert.InDelta(t, 5.0, streamed[0].Value, 1e-9)
 }
+
+func TestExecutorDoesNotReuseMatchedOutputForRepeatedKey(t *testing.T) {
+	store := events.NewMemStore(0)
+	now := time.Now()
+	store.Append(events.Event{Stream: "orders.triaged", Key: "k", Ts: now, Payload: map[string]any{"category": "refund"}, Direction: events.Produced})
+	store.Append(events.Event{Stream: "orders.triaged", Key: "k", Ts: now.Add(time.Millisecond), Payload: map[string]any{"category": "ship"}, Direction: events.Produced})
+
+	judge := &stubJudge{scoreFor: func(p eval.Pair) eval.Score {
+		if p.Input["severity"] == p.Output["category"] {
+			return eval.Score{Value: 5}
+		}
+		return eval.Score{Value: 1}
+	}}
+
+	exec := eval.New(eval.Config{Judge: judge, MatchTimeout: 50 * time.Millisecond})
+	inputs := []events.Event{
+		{Stream: "orders.new", Key: "k", Payload: map[string]any{"severity": "refund"}},
+		{Stream: "orders.new", Key: "k", Payload: map[string]any{"severity": "ship"}},
+	}
+
+	require.NoError(t, exec.RunInputs(context.Background(), mkScenario(), store, inputs))
+
+	results := exec.Finalize(mkScenario())
+	require.Len(t, results, 1)
+	assert.InDelta(t, 5.0, results[0].Value, 1e-9)
+	assert.Equal(t, 2, judge.calls)
+}

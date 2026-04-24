@@ -103,10 +103,10 @@ func doEval(ctx context.Context, stdout, stderr io.Writer, f *evalFlags) error {
 		runner.Codec = sr.NewCodec(sc)
 	}
 
-	// Seed: run the scenario's produce steps. These put inputs on the topics
-	// the agent-under-test consumes.
-	if err := runner.Run(ctx, s); err != nil {
-		fmt.Fprintf(stderr, "eval: scenario seeding encountered an error: %v\n", err)
+	// Seed: only run the scenario's produce steps. Eval mode should not execute
+	// consume/HTTP/sleep steps from the main scenario while preparing inputs.
+	if err := runner.Run(ctx, produceOnlyScenario(s)); err != nil {
+		return fmt.Errorf("eval: scenario seeding: %w", err)
 	}
 
 	// Collect the inputs from the events store so the judge has the original
@@ -165,6 +165,21 @@ func inputEvents(s *scenario.Scenario, store events.Store) []events.Event {
 		out = append(out, store.Query(topic)...)
 	}
 	return out
+}
+
+func produceOnlyScenario(s *scenario.Scenario) *scenario.Scenario {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	clone.Spec = s.Spec
+	clone.Spec.Steps = nil
+	for _, step := range s.Spec.Steps {
+		if step.Produce != nil {
+			clone.Spec.Steps = append(clone.Spec.Steps, step)
+		}
+	}
+	return &clone
 }
 
 func pushEvalReport(ctx context.Context, f *evalFlags, s *scenario.Scenario, results []eval.Result, stderr io.Writer) error {

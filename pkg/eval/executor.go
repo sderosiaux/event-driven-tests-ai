@@ -150,11 +150,12 @@ func (e *Executor) RunInputs(ctx context.Context, s *scenario.Scenario, store ev
 		return fmt.Errorf("eval: agent_under_test must declare at least one produces topic")
 	}
 
+	used := make(map[string]map[int]struct{}, len(outStreams))
 	for i, in := range inputs {
 		if e.cfg.Iterations > 0 && i >= e.cfg.Iterations {
 			break
 		}
-		out, ok := waitForOutput(ctx, store, outStreams, in.Key, e.cfg.MatchTimeout)
+		out, ok := waitForOutput(ctx, store, outStreams, in.Key, e.cfg.MatchTimeout, used)
 		if !ok {
 			e.Observe(ctx, s, Pair{
 				Input:  asMap(in.Payload),
@@ -175,12 +176,21 @@ func (e *Executor) RunInputs(ctx context.Context, s *scenario.Scenario, store ev
 // waitForOutput polls the store every 50ms for any event in outStreams whose
 // key matches. Small-poll is fine — the store is in-memory and the executor
 // is the only writer-serialization boundary.
-func waitForOutput(ctx context.Context, store events.Store, streams []string, key string, timeout time.Duration) (events.Event, bool) {
+func waitForOutput(ctx context.Context, store events.Store, streams []string, key string, timeout time.Duration, used map[string]map[int]struct{}) (events.Event, bool) {
 	deadline := time.Now().Add(timeout)
 	for {
 		for _, name := range streams {
-			for _, e := range store.Query(name) {
+			seen := used[name]
+			for idx, e := range store.Query(name) {
+				if _, ok := seen[idx]; ok {
+					continue
+				}
 				if e.Key == key {
+					if seen == nil {
+						seen = map[int]struct{}{}
+						used[name] = seen
+					}
+					seen[idx] = struct{}{}
 					return e, true
 				}
 			}
