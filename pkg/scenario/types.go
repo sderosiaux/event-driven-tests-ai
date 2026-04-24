@@ -67,8 +67,12 @@ type KafkaAuth struct {
 }
 
 type SchemaRegistryConfig struct {
-	URL    string `yaml:"url" json:"url"`
-	Flavor string `yaml:"flavor,omitempty" json:"flavor,omitempty"` // confluent | apicurio
+	URL      string `yaml:"url" json:"url"`
+	Flavor   string `yaml:"flavor,omitempty" json:"flavor,omitempty"` // confluent | apicurio
+	BasePath string `yaml:"base_path,omitempty" json:"base_path,omitempty"`
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+	BearerTk string `yaml:"bearer_token,omitempty" json:"bearer_token,omitempty"`
 }
 
 type HTTPConnector struct {
@@ -114,13 +118,14 @@ type Step struct {
 }
 
 type ProduceStep struct {
-	Topic    string     `yaml:"topic" json:"topic"`
-	Payload  string     `yaml:"payload" json:"payload"` // ref to data key, e.g. ${data.orders}
-	Key      string     `yaml:"key,omitempty" json:"key,omitempty"`
-	Rate     string     `yaml:"rate,omitempty" json:"rate,omitempty"` // e.g. "50/s"
-	Count    int        `yaml:"count,omitempty" json:"count,omitempty"`
-	FailRate Percentage `yaml:"fail_rate,omitempty" json:"fail_rate,omitempty"`
-	FailMode string     `yaml:"fail_mode,omitempty" json:"fail_mode,omitempty"` // schema_violation | timeout | broker_not_available
+	Topic         string     `yaml:"topic" json:"topic"`
+	Payload       string     `yaml:"payload" json:"payload"` // ref to data key, e.g. ${data.orders}
+	Key           string     `yaml:"key,omitempty" json:"key,omitempty"`
+	Rate          string     `yaml:"rate,omitempty" json:"rate,omitempty"` // e.g. "50/s"
+	Count         int        `yaml:"count,omitempty" json:"count,omitempty"`
+	FailRate      Percentage `yaml:"fail_rate,omitempty" json:"fail_rate,omitempty"`
+	FailMode      string     `yaml:"fail_mode,omitempty" json:"fail_mode,omitempty"` // schema_violation | timeout | broker_not_available
+	SchemaSubject string     `yaml:"schema_subject,omitempty" json:"schema_subject,omitempty"`
 }
 
 type ConsumeStep struct {

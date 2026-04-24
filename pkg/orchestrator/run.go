@@ -22,6 +22,7 @@ import (
 type Runner struct {
 	Kafka      KafkaPort
 	HTTP       HTTPPort
+	Codec      CodecPort                        // optional Schema Registry codec
 	Store      events.Store
 	Generators map[string]*data.FakerGenerator // keyed by data alias from scenario.Spec.Data
 	Logger     func(format string, args ...any) // optional, defaults to no-op
@@ -120,7 +121,10 @@ func (r *Runner) runProduce(ctx context.Context, step *scenario.Step) error {
 		if err != nil {
 			return err
 		}
-		valueBytes := encodeWireValue(payload)
+		valueBytes, err := r.encodeForWire(ctx, p.SchemaSubject, payload)
+		if err != nil {
+			return fmt.Errorf("produce %q: %w", p.Topic, err)
+		}
 
 		key := r.interp.expand(p.Key)
 		if key == "" {
@@ -280,7 +284,7 @@ func (r *Runner) runConsume(ctx context.Context, step *scenario.Step) error {
 		if rec.Topic != topic {
 			return nil
 		}
-		payload := decodeConsumedValue(rec.Value)
+		payload := r.decodeForWire(ctx, rec.Value)
 		r.Store.Append(events.Event{
 			Stream:    rec.Topic,
 			Key:       string(rec.Key),
@@ -486,12 +490,35 @@ func encodeWireValue(payload any) []byte {
 	return b
 }
 
+// encodeForWire dispatches between Schema Registry serialization and the raw
+// JSON path based on whether the step names a schema subject and a codec is
+// wired.
+func (r *Runner) encodeForWire(ctx context.Context, subject string, payload any) ([]byte, error) {
+	if subject != "" && r.Codec != nil {
+		return r.Codec.Encode(ctx, subject, payload)
+	}
+	return encodeWireValue(payload), nil
+}
+
 func decodeConsumedValue(v []byte) any {
 	var payload any
 	if err := json.Unmarshal(v, &payload); err == nil {
 		return payload
 	}
 	return string(v)
+}
+
+// decodeForWire picks between the Schema Registry codec and raw JSON based on
+// the wire header: a record whose first byte is 0x00 is assumed to be an SR
+// payload when a codec is configured. Failures fall back to JSON so producers
+// that mix raw + SR on the same topic do not break the consumer.
+func (r *Runner) decodeForWire(ctx context.Context, v []byte) any {
+	if r.Codec != nil && len(v) >= 1 && v[0] == 0x00 {
+		if decoded, err := r.Codec.Decode(ctx, v); err == nil {
+			return decoded
+		}
+	}
+	return decodeConsumedValue(v)
 }
 
 func kafkaHeadersToStrings(headers map[string][]byte) map[string]string {

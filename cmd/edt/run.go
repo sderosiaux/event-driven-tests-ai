@@ -19,6 +19,7 @@ import (
 	"github.com/event-driven-tests-ai/edt/pkg/report"
 	"github.com/event-driven-tests-ai/edt/pkg/reporter"
 	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	sr "github.com/event-driven-tests-ai/edt/pkg/schemaregistry"
 	"github.com/spf13/cobra"
 )
 
@@ -107,6 +108,9 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 	store := events.NewMemStore(0)
 	runner := orchestrator.New(s, kp, hp, store)
 	runner.RunID = runID
+	if sc := srClientFor(s); sc != nil {
+		runner.Codec = sr.NewCodec(sc)
+	}
 	if err := runner.Run(ctx, s); err != nil {
 		rep.Error = err.Error()
 	}
@@ -166,6 +170,29 @@ func writeAndExit(w io.Writer, r *report.Report, format string) error {
 	default:
 		return &exitError{code: 1, msg: "check failures"}
 	}
+}
+
+// srClientFor builds a Schema Registry client from the scenario's connector
+// config, or nil when none is declared.
+func srClientFor(s *scenario.Scenario) *sr.Client {
+	if s.Spec.Connectors.Kafka == nil || s.Spec.Connectors.Kafka.SchemaRegistry == nil {
+		return nil
+	}
+	r := s.Spec.Connectors.Kafka.SchemaRegistry
+	if r.URL == "" {
+		return nil
+	}
+	base := r.BasePath
+	if base == "" && r.Flavor == "apicurio" {
+		base = "/apis/ccompat/v6"
+	}
+	return sr.New(sr.Config{
+		URL:      r.URL,
+		BasePath: base,
+		User:     r.Username,
+		Pass:     r.Password,
+		BearerTk: r.BearerTk,
+	})
 }
 
 func newRunID() string {

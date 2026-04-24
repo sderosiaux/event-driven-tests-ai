@@ -13,6 +13,7 @@ import (
 	"github.com/event-driven-tests-ai/edt/pkg/report"
 	"github.com/event-driven-tests-ai/edt/pkg/reporter"
 	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	sr "github.com/event-driven-tests-ai/edt/pkg/schemaregistry"
 	"github.com/event-driven-tests-ai/edt/pkg/worker"
 	"github.com/spf13/cobra"
 )
@@ -118,6 +119,9 @@ func runWatchAssignment(
 	runID := newRunID()
 	runner := orchestrator.New(s, kp, hp, store)
 	runner.RunID = runID
+	if sc := srClientFor(s); sc != nil {
+		runner.Codec = sr.NewCodec(sc)
+	}
 
 	// Silence unused-package warning on report.Report import path.
 	_ = report.StatusPass

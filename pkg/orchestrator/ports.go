@@ -33,3 +33,11 @@ type ConsumeRequest = kafka.ConsumeRequest
 type HTTPPort interface {
 	Do(ctx context.Context, step *scenario.HTTPStep) (*httpc.Response, error)
 }
+
+// CodecPort is the surface the orchestrator needs from a Schema Registry
+// codec: encode a Go value for a subject (produce) and decode a wire payload
+// (consume). Nil is valid — scenarios without schema_registry use raw JSON.
+type CodecPort interface {
+	Encode(ctx context.Context, subject string, value any) ([]byte, error)
+	Decode(ctx context.Context, data []byte) (any, error)
+}
