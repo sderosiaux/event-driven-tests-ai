@@ -1,0 +1,20 @@
+apiVersion: v2
+name: edt
+description: |
+  event-driven-tests-ai — test Kafka, HTTP, and AI-agent flows against your
+  real infrastructure. Deploys the control plane (API + UI + Prometheus
+  endpoint) and one or more watch-mode workers that execute scenarios.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/sderosiaux/event-driven-tests-ai
+sources:
+  - https://github.com/sderosiaux/event-driven-tests-ai
+maintainers:
+  - name: sderosiaux
+    email: sderosiaux@conduktor.io
+keywords:
+  - kafka
+  - testing
+  - synthetic-monitoring
+  - llm-eval

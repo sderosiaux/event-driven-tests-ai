@@ -1,0 +1,112 @@
+## Default values for the edt chart.
+## Override with -f my-values.yaml or --set flags.
+
+image:
+  repository: ghcr.io/sderosiaux/event-driven-tests-ai
+  tag: ""  # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+## Full override for the resource name used in templates.
+## Defaults to the release name.
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+## Control plane — serves the API, UI, MCP, and /metrics.
+controlPlane:
+  enabled: true
+  replicaCount: 1
+
+  ## Bearer token the CLI and workers use when --require-auth is on.
+  ## Leave unset to disable auth (dev only). When set, a Secret is created
+  ## and injected as EDT_ADMIN_TOKEN.
+  adminToken: ""
+
+  ## Postgres DSN, e.g. postgres://edt:secret@postgres/edt?sslmode=disable.
+  ## Leave empty for the in-memory store (NOT persisted across restarts —
+  ## dev only).
+  dbURL: ""
+
+  ## Enforce bearer-token role middleware on mutating endpoints.
+  requireAuth: true
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+## Workers — pick up assignments from the control plane and run scenarios.
+worker:
+  enabled: true
+  replicaCount: 2
+
+  ## Labels the worker announces on registration. Scenarios targeting a
+  ## specific pool (e.g. "env=staging") can filter on these.
+  labels:
+    env: default
+
+  ## Interval between registration/heartbeat ticks.
+  heartbeatInterval: 10s
+
+  ## Intervals for watch-mode loops (set to 0 to keep defaults).
+  loopInterval: 5s
+  evalInterval: 1m
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  ## Extra environment variables for the worker pod. Use this to inject
+  ## ANTHROPIC_API_KEY for eval-mode scenarios, or AWS_* overrides.
+  extraEnv: []
+  #  - name: ANTHROPIC_API_KEY
+  #    valueFrom:
+  #      secretKeyRef:
+  #        name: edt-anthropic
+  #        key: api-key
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+## Prometheus monitoring. When set, emits a ServiceMonitor (requires the
+## Prometheus Operator CRDs).
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}

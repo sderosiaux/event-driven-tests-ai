@@ -1,0 +1,77 @@
+{{- if .Values.worker.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "edt.fullname" . }}-worker
+  labels:
+    {{- include "edt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "edt.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "edt.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      {{- with .Values.worker.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "edt.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: edt
+          image: {{ include "edt.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - worker
+            - --control-plane={{ include "edt.controlPlaneURL" . }}
+            {{- if .Values.controlPlane.adminToken }}
+            - --token=$(EDT_TOKEN)
+            {{- end }}
+            {{- range $k, $v := .Values.worker.labels }}
+            - --labels={{ $k }}={{ $v }}
+            {{- end }}
+            {{- if .Values.worker.heartbeatInterval }}
+            - --heartbeat-interval={{ .Values.worker.heartbeatInterval }}
+            {{- end }}
+            {{- if .Values.worker.loopInterval }}
+            - --loop-interval={{ .Values.worker.loopInterval }}
+            {{- end }}
+            {{- if .Values.worker.evalInterval }}
+            - --eval-interval={{ .Values.worker.evalInterval }}
+            {{- end }}
+          env:
+            {{- if .Values.controlPlane.adminToken }}
+            - name: EDT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "edt.adminSecretName" . }}
+                  key: admin-token
+            {{- end }}
+            {{- with .Values.worker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end -}}

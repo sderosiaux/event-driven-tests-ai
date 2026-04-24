@@ -1,0 +1,81 @@
+{{- if .Values.controlPlane.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "edt.fullname" . }}-controlplane
+  labels:
+    {{- include "edt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+spec:
+  replicas: {{ .Values.controlPlane.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "edt.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controlplane
+  template:
+    metadata:
+      labels:
+        {{- include "edt.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controlplane
+      {{- with .Values.controlPlane.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "edt.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: edt
+          image: {{ include "edt.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --addr=:{{ .Values.controlPlane.service.port }}
+            {{- if .Values.controlPlane.requireAuth }}
+            - --require-auth
+            {{- end }}
+          env:
+            {{- if .Values.controlPlane.adminToken }}
+            - name: EDT_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "edt.adminSecretName" . }}
+                  key: admin-token
+            {{- end }}
+            {{- if .Values.controlPlane.dbURL }}
+            - name: EDT_DB_URL
+              value: {{ .Values.controlPlane.dbURL | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.controlPlane.service.port }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end -}}

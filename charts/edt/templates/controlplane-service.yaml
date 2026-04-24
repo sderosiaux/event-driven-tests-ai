@@ -1,0 +1,18 @@
+{{- if .Values.controlPlane.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "edt.fullname" . }}-controlplane
+  labels:
+    {{- include "edt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+spec:
+  type: {{ .Values.controlPlane.service.type }}
+  ports:
+    - port: {{ .Values.controlPlane.service.port }}
+      targetPort: http
+      name: http
+  selector:
+    {{- include "edt.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+{{- end -}}

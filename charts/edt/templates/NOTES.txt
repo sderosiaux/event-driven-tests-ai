@@ -1,0 +1,22 @@
+{{ include "edt.fullname" . }} is up.
+
+Control plane:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "edt.fullname" . }}-controlplane {{ .Values.controlPlane.service.port }}:{{ .Values.controlPlane.service.port }}
+
+Then open:
+  http://localhost:{{ .Values.controlPlane.service.port }}          # UI
+  http://localhost:{{ .Values.controlPlane.service.port }}/metrics  # Prometheus
+
+{{- if not .Values.controlPlane.adminToken }}
+
+Auth is disabled (no controlPlane.adminToken set). Do not expose the control plane publicly without enabling auth:
+  helm upgrade edt ./charts/edt --reuse-values --set controlPlane.adminToken=$(openssl rand -hex 32)
+{{- end }}
+
+Workers: {{ .Values.worker.replicaCount }} replica(s) assigned by the control plane. Submit scenarios:
+  curl -X POST http://localhost:{{ .Values.controlPlane.service.port }}/api/v1/scenarios \
+    {{- if .Values.controlPlane.adminToken }}
+    -H "Authorization: Bearer <admin-token>" \
+    {{- end }}
+    -H "Content-Type: application/yaml" \
+    --data-binary @my-scenario.yaml
