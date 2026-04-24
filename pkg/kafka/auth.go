@@ -70,13 +70,16 @@ func buildAuthOpts(auth *scenario.KafkaAuth) ([]kgo.Opt, error) {
 		}, nil
 
 	case scenario.KafkaAuthAWSIAM:
+		// M3 supports static credentials only. The full AWS SDK credential
+		// chain (IRSA, EC2 instance profile, ECS task role, shared-credentials
+		// file) lands in M6 — operators on AWS-managed runtimes should stage
+		// credentials via AWS_* env vars in the meantime.
 		creds := aws.Auth{
 			AccessKey:    auth.Username,
 			SecretKey:    auth.Password,
 			SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
 			UserAgent:    "edt/" + auth.Region,
 		}
-		// Fall back to AWS env if explicit scenario fields are empty.
 		if creds.AccessKey == "" {
 			creds.AccessKey = os.Getenv("AWS_ACCESS_KEY_ID")
 		}
@@ -84,7 +87,7 @@ func buildAuthOpts(auth *scenario.KafkaAuth) ([]kgo.Opt, error) {
 			creds.SecretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
 		}
 		if creds.AccessKey == "" || creds.SecretKey == "" {
-			return nil, fmt.Errorf("kafka: aws_iam requires username/password (access/secret keys) or AWS_* env vars")
+			return nil, fmt.Errorf("kafka: aws_iam requires username/password (access/secret keys) or AWS_* env vars; IRSA/instance-profile chain lands in M6")
 		}
 		return []kgo.Opt{
 			saslTLSDialer(),
@@ -124,8 +127,19 @@ func newOIDCTokenFetcher(auth *scenario.KafkaAuth) (func(context.Context) (oauth
 	return func(ctx context.Context) (oauth.Auth, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		if cached != "" && time.Now().Before(expiryAt.Add(-60*time.Second)) {
-			return oauth.Auth{Token: cached}, nil
+		// Refresh skew scales with the token's TTL so a token with TTL <= 60s
+		// does not land as immediately-stale on every SASL session. 60s is
+		// fine for the 1h+ tokens most IdPs issue; shorter tokens keep at
+		// least half their life before a refresh is triggered.
+		if cached != "" && !expiryAt.IsZero() {
+			skew := 60 * time.Second
+			ttl := time.Until(expiryAt)
+			if half := ttl / 2; half > 0 && half < skew {
+				skew = half
+			}
+			if time.Now().Before(expiryAt.Add(-skew)) {
+				return oauth.Auth{Token: cached}, nil
+			}
 		}
 		form := url.Values{}
 		form.Set("grant_type", "client_credentials")
