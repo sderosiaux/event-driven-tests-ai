@@ -48,20 +48,27 @@ func TestCodecRefreshesLatestAfterTTL(t *testing.T) {
 }
 
 // Codex P1 #8: subjects containing reserved URL characters must still address
-// the right registry entry. Without url.PathEscape, "orders/v1-value" would
-// hit /subjects/orders/v1-value/versions/latest and 404.
+// the right registry entry. We assert on RawPath because net/http silently
+// decodes Path before the handler sees it — the wire bytes are what matter.
 func TestClientEscapesSubjectInURL(t *testing.T) {
-	var seenPath string
+	var rawPath, decodedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenPath = r.URL.Path
+		rawPath = r.URL.RawPath
+		decodedPath = r.URL.Path
 		_, _ = w.Write([]byte(`{"id":1,"subject":"x","version":1,"schema":"{}"}`))
 	}))
 	defer srv.Close()
 	c := sr.New(sr.Config{URL: srv.URL})
 	_, _ = c.GetLatestVersion(context.Background(), "orders/v1-value")
 
+	// RawPath exposes the escaped form sent on the wire; Path is the decoded
+	// rendition the handler sees for routing purposes.
+	assert.True(t, strings.Contains(rawPath, "%2F"),
+		"subject slash must be percent-encoded on the wire, got RawPath=%q Path=%q", rawPath, decodedPath)
+	// And the decoded form should still agree with what the caller asked for,
+	// so upstream routes (/subjects/{subject}/versions/latest) still match.
+	assert.Equal(t, "/subjects/orders/v1-value/versions/latest", decodedPath)
+	// url.PathEscape is what the client should have called.
 	want := "/subjects/" + url.PathEscape("orders/v1-value") + "/versions/latest"
-	assert.Equal(t, want, seenPath)
-	// Sanity: the raw slash inside the subject should be percent-encoded.
-	assert.True(t, strings.Contains(seenPath, "%2F"), "subject slash should be percent-encoded, got %q", seenPath)
+	assert.Equal(t, want, rawPath)
 }
