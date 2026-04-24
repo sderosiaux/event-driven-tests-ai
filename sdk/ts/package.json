@@ -18,6 +18,9 @@
     }
   },
   "files": ["dist", "README.md"],
+  "bin": {
+    "edt-ts": "./dist/cli.js"
+  },
   "engines": {
     "node": ">=20"
   },
@@ -28,6 +31,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "tsx": "^4.19.2",
     "yaml": "^2.6.1"
   },
   "devDependencies": {

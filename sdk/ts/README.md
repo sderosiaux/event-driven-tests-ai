@@ -52,6 +52,38 @@ Pipe the output into `edt run -f -` or write it to disk and commit it.
 
 A camelCase fluent builder (`scenario().kafka(...).produce(...)`) lands in the next release.
 
+## Fluent builder
+
+Same result, less typing:
+
+```ts
+import { scenario } from "@event-driven-tests-ai/sdk";
+
+export default scenario("order-flow-e2e")
+  .label("team", "commerce")
+  .kafka("localhost:9092")
+  .produce("place-order", { topic: "orders", payload: "${data.orders}", count: 100 })
+  .consume("wait-ack", {
+    topic: "orders.ack",
+    timeout: "5s",
+    match: ["payload.orderId == previous.orderId"],
+    slowMode: { pauseEvery: 100, pauseFor: "500ms" },
+  })
+  .check("ack_p99", "percentile(latency('orders', 'orders.ack'), 99) < duration('200ms')", { severity: "critical" })
+  .build();
+```
+
+## CLI: `edt-ts compile`
+
+Compile a TS scenario file straight to YAML:
+
+```bash
+npx edt-ts compile scenarios/order-flow.ts -o order-flow.yaml
+edt run --file order-flow.yaml
+```
+
+The TS file can export a `Scenario`, a `ScenarioBuilder`, or an array of either (emitted as a multi-doc YAML).
+
 ## Status
 
 Early — API may still change. Pin exact versions until 0.2.x.
