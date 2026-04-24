@@ -55,6 +55,39 @@ func ValidateYAML(b []byte) error {
 	if err := compiled.Validate(y); err != nil {
 		return fmt.Errorf("scenario: validation failed: %w", err)
 	}
+	// Cross-field constraints the reflected JSON Schema can't express (codex
+	// P2 2026-04-24): gRPC steps must supply exactly one of proto/proto_file,
+	// and bearer auth requires a non-empty token. Easier to check against the
+	// already-parsed Scenario struct than to bolt a oneOf/anyOf onto the
+	// reflected schema.
+	s, err := Parse(b)
+	if err != nil {
+		return err
+	}
+	return validateCrossField(s)
+}
+
+func validateCrossField(s *Scenario) error {
+	if s.Spec.Connectors.GRPC != nil && s.Spec.Connectors.GRPC.Auth != nil {
+		auth := s.Spec.Connectors.GRPC.Auth
+		if auth.Type == "bearer" && auth.Token == "" {
+			return fmt.Errorf("scenario: connectors.grpc.auth.token is required when type=bearer")
+		}
+	}
+	for i, step := range s.Spec.Steps {
+		if step.GRPC == nil {
+			continue
+		}
+		if step.GRPC.Proto == "" && step.GRPC.ProtoFile == "" {
+			return fmt.Errorf("scenario: steps[%d] %q: grpc step requires either `proto` (inline) or `proto_file`", i, step.Name)
+		}
+		if step.GRPC.Proto != "" && step.GRPC.ProtoFile != "" {
+			return fmt.Errorf("scenario: steps[%d] %q: grpc step must set exactly one of `proto` or `proto_file`, not both", i, step.Name)
+		}
+		if step.GRPC.Method == "" {
+			return fmt.Errorf("scenario: steps[%d] %q: grpc.method is required", i, step.Name)
+		}
+	}
 	return nil
 }
 

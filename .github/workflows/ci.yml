@@ -71,11 +71,28 @@ jobs:
         run: helm lint charts/edt
       - name: Helm template renders
         run: |
-          helm template ci charts/edt > /tmp/default.yaml
-          helm template ci charts/edt --set controlPlane.adminToken=secret --set controlPlane.dbURL=postgres://x --set serviceMonitor.enabled=true > /tmp/full.yaml
+          # Production shape: requireAuth=true with both tokens set.
+          helm template ci charts/edt \
+            --set controlPlane.adminToken=admin-secret \
+            --set controlPlane.workerToken=worker-secret > /tmp/default.yaml
+          # Full render: + Postgres + ServiceMonitor.
+          helm template ci charts/edt \
+            --set controlPlane.adminToken=admin-secret \
+            --set controlPlane.workerToken=worker-secret \
+            --set controlPlane.dbURL=postgres://x \
+            --set serviceMonitor.enabled=true > /tmp/full.yaml
           test -s /tmp/default.yaml && test -s /tmp/full.yaml
           grep -q 'kind: Deployment' /tmp/default.yaml
           grep -q 'kind: ServiceMonitor' /tmp/full.yaml
+          # Auth-off render (dev mode) must succeed without tokens.
+          helm template ci charts/edt --set controlPlane.requireAuth=false > /dev/null
+          # Half-enabled auth must REFUSE to render (codex P1 2026-04-24:
+          # requireAuth=true + empty workerToken silently shipped workers
+          # unable to register).
+          if helm template ci charts/edt --set controlPlane.adminToken=secret 2>/dev/null; then
+            echo "expected helm template to fail when requireAuth=true + workerToken is empty"
+            exit 1
+          fi
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

@@ -56,7 +56,9 @@ func NewServer(cfg Config) *Server {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	store := storage.NewMemStore() // M2 default; Postgres backend lands in M2-T2b.
+	// NewServer defaults to in-memory storage. Use NewServerAuto (or
+	// NewServerWithStorage) to back the control plane with Postgres.
+	store := storage.NewMemStore()
 	mreg := metrics.New()
 	s := &Server{cfg: cfg, router: r, store: store, api: api.NewWithMetrics(store, mreg), metrics: mreg}
 	s.bootstrapAdmin()

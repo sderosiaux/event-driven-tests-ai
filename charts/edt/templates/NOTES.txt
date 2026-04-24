@@ -7,14 +7,16 @@ Then open:
   http://localhost:{{ .Values.controlPlane.service.port }}          # UI
   http://localhost:{{ .Values.controlPlane.service.port }}/metrics  # Prometheus
 
-{{- if not .Values.controlPlane.adminToken }}
+{{- if not .Values.controlPlane.requireAuth }}
 
-Auth is disabled (no controlPlane.adminToken set). Do not expose the control plane publicly without enabling auth:
+Auth is disabled (controlPlane.requireAuth=false). Do not expose the control plane publicly without enabling auth:
   helm upgrade edt ./charts/edt --reuse-values \
+    --set controlPlane.requireAuth=true \
     --set controlPlane.adminToken=$(openssl rand -hex 32) \
     --set controlPlane.workerToken=$(openssl rand -hex 32)
+{{- else }}
 
-Workers use a separate worker-scoped token (RoleWorker, not admin) when controlPlane.workerToken is set.
+Auth is enabled. Admin token is used by CLI/agents to mutate state; workers use the separate worker-scoped token (RoleWorker).
 {{- end }}
 
 Workers: {{ .Values.worker.replicaCount }} replica(s) assigned by the control plane. Submit scenarios:

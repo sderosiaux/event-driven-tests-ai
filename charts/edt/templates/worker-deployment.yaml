@@ -1,4 +1,12 @@
 {{- if .Values.worker.enabled -}}
+{{/*
+Codex P1 2026-04-24: an install with requireAuth=true + adminToken set +
+workerToken empty silently ships workers that cannot authenticate. Fail
+template rendering instead of letting operators discover it at runtime.
+*/}}
+{{- if and .Values.controlPlane.requireAuth (not .Values.controlPlane.workerToken) .Values.worker.enabled -}}
+{{- fail "charts/edt: controlPlane.requireAuth=true but controlPlane.workerToken is empty. Workers cannot register without a token. Set controlPlane.workerToken (e.g. openssl rand -hex 32) or disable auth with controlPlane.requireAuth=false." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -59,6 +59,75 @@ extraneous: true
 	require.Error(t, err)
 }
 
+// Codex P2 2026-04-24: GRPCStep marks both proto + proto_file optional in
+// its tags; the cross-field check in ValidateYAML rejects YAML that
+// supplies neither (or both), so invalid scenarios fail early instead of
+// at runtime.
+func TestValidateGRPCStepRequiresProtoOrProtoFile(t *testing.T) {
+	input := []byte(`
+apiVersion: edt.io/v1
+kind: Scenario
+metadata: { name: x }
+spec:
+  connectors:
+    grpc:
+      address: host:443
+  steps:
+    - name: call
+      grpc:
+        method: pkg.Svc/Method
+        request: '{}'
+`)
+	err := scenario.ValidateYAML(input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "proto")
+}
+
+func TestValidateGRPCStepRejectsBothProtoAndProtoFile(t *testing.T) {
+	input := []byte(`
+apiVersion: edt.io/v1
+kind: Scenario
+metadata: { name: x }
+spec:
+  connectors:
+    grpc:
+      address: host:443
+  steps:
+    - name: call
+      grpc:
+        proto: "syntax = \"proto3\";"
+        proto_file: /etc/service.proto
+        method: pkg.Svc/Method
+        request: '{}'
+`)
+	err := scenario.ValidateYAML(input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one")
+}
+
+func TestValidateGRPCBearerAuthRequiresToken(t *testing.T) {
+	input := []byte(`
+apiVersion: edt.io/v1
+kind: Scenario
+metadata: { name: x }
+spec:
+  connectors:
+    grpc:
+      address: host:443
+      auth:
+        type: bearer
+  steps:
+    - name: call
+      grpc:
+        proto: "syntax = \"proto3\";"
+        method: pkg.Svc/Method
+        request: '{}'
+`)
+	err := scenario.ValidateYAML(input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.token")
+}
+
 func TestValidateAcceptsPercentageLiteral(t *testing.T) {
 	input := []byte(`
 apiVersion: edt.io/v1

@@ -118,10 +118,17 @@ func (r *Runner) runWebSocket(ctx context.Context, step *scenario.Step) error {
 			if err != nil {
 				return fmt.Errorf("websocket: invalid slow_mode.pause_for %q: %w", ws.SlowMode.PauseFor, err)
 			}
-			select {
-			case <-time.After(pause):
-			case <-ctx.Done():
-				return ctx.Err()
+			// Cap the sleep at the step's remaining time so slow_mode can't
+			// overrun the declared timeout (codex P1 2026-04-24).
+			if remaining := time.Until(deadline); pause > remaining {
+				pause = remaining
+			}
+			if pause > 0 {
+				select {
+				case <-time.After(pause):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 	}

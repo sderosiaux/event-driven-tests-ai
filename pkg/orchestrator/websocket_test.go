@@ -189,6 +189,37 @@ func TestWebSocketStepRejectsMissingPort(t *testing.T) {
 	assert.Contains(t, err.Error(), "no client configured")
 }
 
+// Codex P1 2026-04-24: slow_mode used to sleep for pause_for even if the
+// step deadline was shorter. A busy stream could overrun the declared
+// timeout by up to pause_for. The cap must bound pause by remaining time.
+func TestWebSocketStepSlowModeRespectsStepTimeout(t *testing.T) {
+	store := events.NewMemStore(0)
+	// Three frames trigger slow_mode on every one (pause_every=1), each
+	// with a 10s pause_for. Step timeout is 100ms — total wall clock must
+	// not exceed ~200ms even though three 10s sleeps were requested.
+	fk := &fakeWS{frames: []ws.Message{
+		{Payload: map[string]any{"n": 1}},
+		{Payload: map[string]any{"n": 2}},
+		{Payload: map[string]any{"n": 3}},
+	}}
+	r := orchestrator.New(&scenario.Scenario{}, nil, nil, store)
+	r.WebSocket = fk
+
+	s := wsScenario(scenario.Step{
+		Name: "ws",
+		WebSocket: &scenario.WebSocketStep{
+			Path:     "/x",
+			Count:    10, // never reached
+			Timeout:  "100ms",
+			SlowMode: &scenario.SlowMode{PauseEvery: 1, PauseFor: "10s"},
+		},
+	})
+	t0 := time.Now()
+	require.NoError(t, r.Run(context.Background(), s))
+	elapsed := time.Since(t0)
+	assert.Less(t, elapsed, 500*time.Millisecond, "slow_mode pause must not exceed remaining step budget")
+}
+
 // Regression guard: an unmatched count bound should not block forever if the
 // stream dries up. The fake blocks on ctx.Done for "no more frames", which
 // means waiting past the step timeout must surface as a clean return.

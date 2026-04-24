@@ -17,9 +17,11 @@
 //   - scenario_slo(name, window?)             → pass-rate per check
 //   - list_workers()                          → registered workers + liveness
 //
-// Writes are intentionally absent from M5: a misbehaving agent should not be
-// able to mint tokens, upsert scenarios, or delete runs. Write tools land in
-// a follow-up once a permission policy is in place.
+// Write tools (upsert_scenario, assign_scenario) are gated by WritePolicy.
+// The production wiring in pkg/controlplane/server.go requires RoleEditor+
+// via the auth middleware; unauthenticated or viewer-role callers see
+// tool-forbidden (-32604). Token issuance and run mutation remain out of
+// scope — agents cannot mint credentials or rewrite history.
 package mcp
 
 import (
