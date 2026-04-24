@@ -35,6 +35,49 @@ func New(baseURL, token string) *Client {
 	}
 }
 
+// PushReportRaw POSTs a pre-encoded eval payload to /api/v1/runs. The
+// control-plane ingest is permissive: any JSON with scenario + run_id is
+// accepted, so eval results can ride the same endpoint while a dedicated wire
+// shape matures.
+func (c *Client) PushReportRaw(ctx context.Context, scenarioName string, body []byte) error {
+	payload, err := json.Marshal(map[string]any{
+		"scenario": scenarioName,
+		"run_id":   "eval-" + time.Now().UTC().Format("20060102T150405"),
+		"mode":     "eval",
+		"started_at": time.Now().UTC(),
+		"finished_at": time.Now().UTC(),
+		"raw":      string(body),
+	})
+	if err != nil {
+		return err
+	}
+	return c.post(ctx, "/api/v1/runs", payload)
+}
+
+func (c *Client) post(ctx context.Context, path string, body []byte) error {
+	if c.baseURL == "" {
+		return fmt.Errorf("reporter: empty baseURL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("reporter: post %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("reporter: control plane returned %d on %s: %s", resp.StatusCode, path, string(raw))
+	}
+	return nil
+}
+
 // PushReport POSTs the report JSON to /api/v1/runs.
 func (c *Client) PushReport(ctx context.Context, r *report.Report) error {
 	if c.baseURL == "" {
