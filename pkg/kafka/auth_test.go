@@ -64,16 +64,10 @@ func TestBuildAuthOptsOAuthHappyPath(t *testing.T) {
 	assert.Len(t, opts, 2, "dialer + SASL")
 }
 
-func TestBuildAuthOptsAWSIAMRequiresKeys(t *testing.T) {
-	// Isolate from the host's AWS env so an operator running tests with
-	// real credentials does not accidentally make this pass.
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	_, err := buildAuthOpts(&scenario.KafkaAuth{Type: scenario.KafkaAuthAWSIAM})
-	require.ErrorContains(t, err, "aws_iam requires")
-}
-
-func TestBuildAuthOptsAWSIAMHappyPath(t *testing.T) {
+func TestBuildAuthOptsAWSIAMStaticKeys(t *testing.T) {
+	// Explicit AccessKey/SecretKey in the scenario: the fastest path, no
+	// SDK default-chain lookup at all. Useful for CI pipelines staging
+	// scoped MSK keys out of band.
 	opts, err := buildAuthOpts(&scenario.KafkaAuth{
 		Type:     scenario.KafkaAuthAWSIAM,
 		Username: "AKIA...",
@@ -82,6 +76,24 @@ func TestBuildAuthOptsAWSIAMHappyPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, opts, 2)
+}
+
+func TestBuildAuthOptsAWSIAMDefaultsToSDKChain(t *testing.T) {
+	// No static credentials: the mechanism is wired against the AWS SDK
+	// default chain. LoadDefaultConfig does not fail without credentials,
+	// it fails later at Retrieve-time — matches how every AWS SDK client
+	// in the Go ecosystem behaves and lets the chain discover IRSA /
+	// instance-profile / ECS-task-role creds in production without any
+	// scenario-side configuration.
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	opts, err := buildAuthOpts(&scenario.KafkaAuth{
+		Type:   scenario.KafkaAuthAWSIAM,
+		Region: "us-east-1",
+	})
+	require.NoError(t, err)
+	assert.Len(t, opts, 2, "dialer + SASL mechanism wired against the default chain")
 }
 
 func TestBuildAuthOptsAWSIAMEnvFallback(t *testing.T) {

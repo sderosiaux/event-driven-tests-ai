@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
 	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -70,36 +72,66 @@ func buildAuthOpts(auth *scenario.KafkaAuth) ([]kgo.Opt, error) {
 		}, nil
 
 	case scenario.KafkaAuthAWSIAM:
-		// M3 supports static credentials only. The full AWS SDK credential
-		// chain (IRSA, EC2 instance profile, ECS task role, shared-credentials
-		// file) lands in M6 — operators on AWS-managed runtimes should stage
-		// credentials via AWS_* env vars in the meantime.
-		creds := aws.Auth{
-			AccessKey:    auth.Username,
-			SecretKey:    auth.Password,
-			SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
-			UserAgent:    "edt/" + auth.Region,
+		mech, err := awsIAMMechanism(auth)
+		if err != nil {
+			return nil, err
 		}
-		if creds.AccessKey == "" {
-			creds.AccessKey = os.Getenv("AWS_ACCESS_KEY_ID")
-		}
-		if creds.SecretKey == "" {
-			creds.SecretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
-		}
-		if creds.AccessKey == "" || creds.SecretKey == "" {
-			return nil, fmt.Errorf("kafka: aws_iam requires username/password (access/secret keys) or AWS_* env vars; IRSA/instance-profile chain lands in M6")
-		}
-		return []kgo.Opt{
-			saslTLSDialer(),
-			kgo.SASL(creds.AsManagedStreamingIAMMechanism()),
-		}, nil
+		return []kgo.Opt{saslTLSDialer(), kgo.SASL(mech)}, nil
 
 	default:
 		return nil, fmt.Errorf("kafka: unknown auth type %q", auth.Type)
 	}
 }
 
-// saslTLSDialer returns a 10s-timeout TLS dialer — the canonical franz-go recipe
+// awsIAMMechanism builds a SASL mechanism for MSK-style IAM authentication.
+//
+// When the scenario supplies explicit username + password, these are treated
+// as static AccessKey/SecretKey and used verbatim — useful for CI pipelines
+// that prefer scoped keys staged out of band.
+//
+// When neither is set, we fall back to the AWS SDK default credential chain
+// (env vars → shared ~/.aws → ECS task role → IRSA → EC2 instance profile).
+// The chain's own caching + refresh handles session expiry, so franz-go can
+// invoke the fetcher on every new SASL session without amplifying IMDS load.
+func awsIAMMechanism(auth *scenario.KafkaAuth) (sasl.Mechanism, error) {
+	if auth.Username != "" && auth.Password != "" {
+		creds := aws.Auth{
+			AccessKey:    auth.Username,
+			SecretKey:    auth.Password,
+			SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
+			UserAgent:    "edt/" + auth.Region,
+		}
+		return creds.AsManagedStreamingIAMMechanism(), nil
+	}
+
+	// Build the default chain once. The returned config carries a cached
+	// CredentialsProvider whose Retrieve() method handles refresh internally.
+	cfgOpts := []func(*awsconfig.LoadOptions) error{}
+	if auth.Region != "" {
+		cfgOpts = append(cfgOpts, awsconfig.WithRegion(auth.Region))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), cfgOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("kafka: aws_iam: load default config: %w", err)
+	}
+	if cfg.Credentials == nil {
+		return nil, fmt.Errorf("kafka: aws_iam: no credentials provider in default chain")
+	}
+
+	fetcher := func(ctx context.Context) (aws.Auth, error) {
+		c, err := cfg.Credentials.Retrieve(ctx)
+		if err != nil {
+			return aws.Auth{}, fmt.Errorf("kafka: aws_iam: retrieve credentials: %w", err)
+		}
+		return aws.Auth{
+			AccessKey:    c.AccessKeyID,
+			SecretKey:    c.SecretAccessKey,
+			SessionToken: c.SessionToken,
+			UserAgent:    "edt/" + auth.Region,
+		}, nil
+	}
+	return aws.ManagedStreamingIAM(fetcher), nil
+}
 // for SASL over a TLS-protected connection (most managed Kafka offerings).
 // Callers that need plaintext SASL can override by passing no-op kgo.Dialer later.
 func saslTLSDialer() kgo.Opt {
