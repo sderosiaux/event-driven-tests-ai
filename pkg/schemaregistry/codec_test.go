@@ -110,17 +110,25 @@ func TestJSONValidationRejectsMissingField(t *testing.T) {
 	assert.Contains(t, err.Error(), "validate")
 }
 
-func TestProtobufNotImplementedYetSurfacesClearError(t *testing.T) {
+func TestProtobufEncodeDecodeViaCodec(t *testing.T) {
 	reg := newFakeRegistry()
 	srv := httptest.NewServer(reg.handler())
 	defer srv.Close()
 	cli := sr.New(sr.Config{URL: srv.URL})
-	_, err := cli.RegisterSchema(context.Background(), "p", `syntax = "proto3"; message X {}`, sr.TypeProtobuf)
+	_, err := cli.RegisterSchema(context.Background(), "p", `syntax = "proto3";
+message X { string id = 1; int32 n = 2; }`, sr.TypeProtobuf)
 	require.NoError(t, err)
 
 	codec := sr.NewCodec(cli)
-	_, err = codec.Encode(context.Background(), "p", map[string]any{})
-	require.ErrorContains(t, err, "PROTOBUF codec not yet implemented")
+	ctx := context.Background()
+	wire, err := codec.Encode(ctx, "p", map[string]any{"id": "abc", "n": 42})
+	require.NoError(t, err)
+	// Schema-registry header + protobuf body round-trips through Decode.
+	out, err := codec.Decode(ctx, wire)
+	require.NoError(t, err)
+	m := out.(map[string]any)
+	assert.Equal(t, "abc", m["id"])
+	assert.EqualValues(t, 42, m["n"])
 }
 
 func TestCodecCachesSchemaPerSubjectAndID(t *testing.T) {
