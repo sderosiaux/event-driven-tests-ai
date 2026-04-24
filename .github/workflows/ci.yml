@@ -20,12 +20,20 @@ jobs:
       - name: Test
         run: go test ./... -race -count=1
       - name: Validate every example scenario
+        # Examples use ${KAFKA_BROKERS}/${HTTPBIN_URL}/${*_TOKEN} placeholders
+        # so one template serves docker-compose, local, and CI. Set dummy
+        # values here so expandHostEnv doesn't blank them and trip the
+        # cross-field "bearer requires non-empty token" check.
+        env:
+          KAFKA_BROKERS: localhost:9092
+          HTTPBIN_URL: http://httpbin.local
+          GRPC_TOKEN: placeholder
+          WS_TOKEN: placeholder
+          SSE_TOKEN: placeholder
         run: |
           go build -o /tmp/edt ./cmd/edt
           set -e
-          # Non-scenario YAML (docker-compose, helm values) is named differently;
-          # examples/*.yaml and examples/demo/scenario.yaml are the scenario set.
-          for f in examples/*.yaml examples/demo/scenario.yaml; do
+          for f in examples/*.yaml examples/demo/scenario.yaml examples/showcase/*.yaml; do
             echo "--- $f"
             /tmp/edt validate --file "$f"
           done
