@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/report"
-	"github.com/event-driven-tests-ai/edt/pkg/reporter"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/reporter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

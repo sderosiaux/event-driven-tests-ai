@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/event-driven-tests-ai/edt/pkg/eval"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/eval"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

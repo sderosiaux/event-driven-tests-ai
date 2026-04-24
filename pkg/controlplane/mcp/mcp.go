@@ -30,7 +30,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
 )
 
 const jsonRPCVersion = "2.0"

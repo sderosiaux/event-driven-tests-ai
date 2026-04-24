@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/events"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

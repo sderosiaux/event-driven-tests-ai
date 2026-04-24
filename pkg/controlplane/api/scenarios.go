@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	"github.com/go-chi/chi/v5"
 )
 

@@ -8,8 +8,8 @@ package metrics
 import (
 	"net/http"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
-	"github.com/event-driven-tests-ai/edt/pkg/report"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )

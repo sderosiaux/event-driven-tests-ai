@@ -127,8 +127,8 @@ This tool exists because "test my order flow end-to-end with assertions on timin
 | Homebrew | `brew install event-driven-tests-ai/tap/edt` |
 | curl | `curl -sSL https://install.edt.io \| sh` |
 | Docker | `docker run --rm -v $PWD:/s ghcr.io/event-driven-tests-ai/edt run --file /s/scenario.yaml` |
-| Binary | [Releases](https://github.com/event-driven-tests-ai/edt/releases/latest) (darwin/linux/windows, amd64/arm64) |
-| Go | `go install github.com/event-driven-tests-ai/edt/cmd/edt@latest` |
+| Binary | [Releases](https://github.com/sderosiaux/event-driven-tests-ai/releases/latest) (darwin/linux/windows, amd64/arm64) |
+| Go | `go install github.com/sderosiaux/event-driven-tests-ai/cmd/edt@latest` |
 
 ## Control plane (optional)
 

@@ -3,7 +3,7 @@ package checks
 import (
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 )
 
 // EvaluateAll runs every check in the list against the evaluator and

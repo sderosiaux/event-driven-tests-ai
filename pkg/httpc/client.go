@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 )
 
 // Client wraps a net/http.Client with the connector-level configuration

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/event-driven-tests-ai/edt/pkg/data"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

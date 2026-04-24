@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	"github.com/spf13/cobra"
 )
 

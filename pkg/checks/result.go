@@ -3,7 +3,7 @@ package checks
 import (
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 )
 
 // CheckResult is the outcome of evaluating a single Check against an event store.

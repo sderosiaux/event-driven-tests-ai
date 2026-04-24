@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	sr "github.com/event-driven-tests-ai/edt/pkg/schemaregistry"
+	sr "github.com/sderosiaux/event-driven-tests-ai/pkg/schemaregistry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -7,7 +7,7 @@ package report
 import (
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/checks"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/checks"
 )
 
 // Status is the top-level run outcome.

@@ -1,4 +1,4 @@
-module github.com/event-driven-tests-ai/edt
+module github.com/sderosiaux/event-driven-tests-ai
 
 go 1.26.1
 

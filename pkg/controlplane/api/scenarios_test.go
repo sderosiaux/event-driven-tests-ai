@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane"
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

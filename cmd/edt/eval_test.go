@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

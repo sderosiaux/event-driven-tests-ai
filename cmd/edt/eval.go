@@ -8,14 +8,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/eval"
-	"github.com/event-driven-tests-ai/edt/pkg/events"
-	"github.com/event-driven-tests-ai/edt/pkg/httpc"
-	"github.com/event-driven-tests-ai/edt/pkg/kafka"
-	"github.com/event-driven-tests-ai/edt/pkg/orchestrator"
-	"github.com/event-driven-tests-ai/edt/pkg/reporter"
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
-	sr "github.com/event-driven-tests-ai/edt/pkg/schemaregistry"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/eval"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/events"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/httpc"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/kafka"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/orchestrator"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/reporter"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
+	sr "github.com/sderosiaux/event-driven-tests-ai/pkg/schemaregistry"
 	"github.com/spf13/cobra"
 )
 

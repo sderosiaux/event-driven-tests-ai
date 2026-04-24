@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
 )
 
 // roleRank maps roles to a hierarchy. Higher rank dominates lower.

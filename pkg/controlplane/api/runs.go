@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/checks"
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
-	"github.com/event-driven-tests-ai/edt/pkg/report"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/checks"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
 	"github.com/go-chi/chi/v5"
 )
 

@@ -10,7 +10,7 @@ package eval
 import (
 	"context"
 
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 )
 
 // Pair is an observed (input, output) pair the executor hands to the judge.

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/report"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
 )
 
 // Client posts reports to a control plane endpoint.

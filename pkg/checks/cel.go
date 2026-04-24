@@ -7,7 +7,7 @@ package checks
 import (
 	"fmt"
 
-	"github.com/event-driven-tests-ai/edt/pkg/events"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/events"
 	"github.com/google/cel-go/cel"
 )
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/events"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/events"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"

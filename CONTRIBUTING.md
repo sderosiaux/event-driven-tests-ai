@@ -18,7 +18,7 @@ Issues describing a real testing pain are worth more than PRs that scratch a sin
 ## Development setup
 
 ```bash
-git clone https://github.com/event-driven-tests-ai/edt.git
+git clone https://github.com/sderosiaux/event-driven-tests-ai.git
 cd edt
 go test ./... -race -count=1   # unit suite
 go build ./cmd/edt             # local binary at ./edt

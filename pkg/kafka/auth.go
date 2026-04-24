@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
 	"github.com/twmb/franz-go/pkg/sasl/oauth"

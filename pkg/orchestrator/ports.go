@@ -8,9 +8,9 @@ package orchestrator
 import (
 	"context"
 
-	"github.com/event-driven-tests-ai/edt/pkg/httpc"
-	"github.com/event-driven-tests-ai/edt/pkg/kafka"
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/httpc"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/kafka"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 )
 
 // KafkaPort is the surface the orchestrator needs from a Kafka client.

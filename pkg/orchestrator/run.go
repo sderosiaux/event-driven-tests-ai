@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/data"
-	"github.com/event-driven-tests-ai/edt/pkg/events"
-	"github.com/event-driven-tests-ai/edt/pkg/httpc"
-	"github.com/event-driven-tests-ai/edt/pkg/kafka"
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/data"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/events"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/httpc"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/kafka"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 )
 
 // Runner executes a scenario's steps and records observed events.

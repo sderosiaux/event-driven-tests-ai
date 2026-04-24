@@ -7,8 +7,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
-	"github.com/event-driven-tests-ai/edt/pkg/report"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
 )
 
 // API holds the dependencies shared across handlers.

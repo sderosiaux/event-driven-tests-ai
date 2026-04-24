@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane"
 	"github.com/spf13/cobra"
 )
 

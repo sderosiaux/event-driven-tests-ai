@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/eval"
-	"github.com/event-driven-tests-ai/edt/pkg/events"
-	"github.com/event-driven-tests-ai/edt/pkg/scenario"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/eval"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/events"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

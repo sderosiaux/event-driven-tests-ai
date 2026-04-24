@@ -11,11 +11,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/api"
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/mcp"
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/metrics"
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/ui"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/api"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/mcp"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/metrics"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/ui"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )

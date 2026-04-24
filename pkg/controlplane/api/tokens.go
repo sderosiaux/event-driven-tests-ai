@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
 	"github.com/go-chi/chi/v5"
 )
 
