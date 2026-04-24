@@ -25,7 +25,17 @@ If your system has AI agents in the flow (LLM consumers that classify, decide, p
 
 ## Quickstart (five minutes)
 
-Install and run against any Kafka you already have:
+Want to see it working before you install anything?
+
+```bash
+git clone https://github.com/sderosiaux/event-driven-tests-ai
+cd event-driven-tests-ai
+docker compose -f examples/demo/docker-compose.yaml up --build
+```
+
+Brings up Redpanda, the control plane on http://localhost:8080, and runs a scenario that produces 20 orders and checks them. Full walkthrough in [`examples/demo/`](examples/demo/).
+
+Install locally and run against any Kafka you already have:
 
 ```bash
 brew install event-driven-tests-ai/tap/edt  # or: curl -sSL install.edt.io | sh
