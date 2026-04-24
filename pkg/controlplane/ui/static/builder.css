@@ -152,8 +152,14 @@ button.wide:hover {
   pointer-events: none;
   z-index: 0;
 }
-.connection { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; }
+.connection { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .connection-arrow { fill: #94a3b8; }
+.connection.check-link { stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 4 4; }
+
+/* Cursor affordances: empty canvas shows grab (pan); cards keep default. */
+.canvas { cursor: grab; }
+.canvas.panning { cursor: grabbing; user-select: none; }
+.canvas .card { cursor: default; }
 .canvas-empty {
   margin: 80px auto;
   max-width: 480px;

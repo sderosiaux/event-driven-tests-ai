@@ -32,9 +32,12 @@ const nextId = () => `s${++stepSeq}`;
 
 const GRID = 20;
 const CARD_W = 320;
-const CARD_H_MIN = 140;
-const COL_STEP = 360;
-const ROW_STEP = 220;
+// Matches the vertical breathing room most card bodies actually need; used
+// only as a fallback before the first render measures the real DOM height.
+const CARD_H_FALLBACK = 220;
+const LANE_STEPS   = 40;   // x coordinate for the step column
+const LANE_CHECKS  = 440;  // x coordinate for the check column
+const ROW_STEP     = 240;  // vertical spacing between consecutive cards
 
 // ----- Step templates ------------------------------------------------------
 
@@ -171,25 +174,45 @@ function render() {
   renderResults();
 }
 
+// The canvas is sized generously (INFINITE_W × INFINITE_H) so the user can
+// drag cards well outside the initial viewport. It always grows to fit
+// whatever is the furthest card plus a margin, so "dragging into new space"
+// never runs out of room.
+const INFINITE_W = 6000;
+const INFINITE_H = 6000;
+
+function computeCanvasSize() {
+  const all = [...state.steps, ...state.checks];
+  const maxX = all.reduce((m, c) => Math.max(m, (c.x || 0) + CARD_W), 0) + 400;
+  const maxY = all.reduce((m, c) => Math.max(m, (c.y || 0) + (cardHeight(c.id) || CARD_H_FALLBACK)), 0) + 400;
+  return { w: Math.max(INFINITE_W, maxX), h: Math.max(INFINITE_H, maxY) };
+}
+
+function cardHeight(id) {
+  const el = document.querySelector(`.card[data-id="${id}"]`);
+  return el ? el.offsetHeight : null;
+}
+
 function renderCanvas() {
-  const maxX = Math.max(800, ...state.steps.map(s => s.x + CARD_W + 80), ...state.checks.map(c => (c.x || 0) + CARD_W + 80));
-  const maxY = Math.max(600, ...state.steps.map(s => s.y + CARD_H_MIN + 100), ...state.checks.map(c => (c.y || 0) + CARD_H_MIN + 100));
-  canvas.style.width = maxX + 'px';
-  canvas.style.height = maxY + 'px';
+  const { w, h } = computeCanvasSize();
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
   canvas.innerHTML = '';
 
   if (state.steps.length === 0 && state.checks.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'canvas-empty';
     empty.innerHTML = `<h3>Empty canvas</h3>
-      <p>Add a step from the palette and drag it anywhere. Execution order = Y position (top to bottom).</p>`;
+      <p>Add a step from the palette and drag it anywhere. Drag the empty background to pan. Execution order = Y position (top to bottom).</p>`;
     canvas.appendChild(empty);
     return;
   }
 
-  canvas.appendChild(connectionsSVG(maxX, maxY));
+  canvas.appendChild(connectionsSVG(w, h));
   state.steps.forEach(step => canvas.appendChild(cardForStep(step)));
   state.checks.forEach(check => canvas.appendChild(cardForCheck(check)));
+  // After cards mount we know their real heights — refine arrow start points.
+  requestAnimationFrame(redrawConnectionsOnly);
 }
 
 function connectionsSVG(w, h) {
@@ -198,24 +221,60 @@ function connectionsSVG(w, h) {
   svg.setAttribute('class', 'connections');
   svg.setAttribute('width', w);
   svg.setAttribute('height', h);
+
+  // Only link STEPS (not checks) in Y-order. Skip pairs where the next step
+  // isn't strictly below — otherwise the arrow loops back and crosses other
+  // cards (user feedback: "weird arrows").
   const ordered = orderedSteps(state);
   for (let i = 0; i < ordered.length - 1; i++) {
     const a = ordered[i], b = ordered[i + 1];
+    if (b.y <= a.y) continue; // skip same-row or backward pairs
+
+    const ah = cardHeight(a.id) || CARD_H_FALLBACK;
     const ax = a.x + CARD_W / 2;
-    const ay = a.y + CARD_H_MIN; // approximation; redrawn with real height after mount.
+    const ay = a.y + ah;          // bottom of source card
     const bx = b.x + CARD_W / 2;
-    const by = b.y;
-    const mid = (ay + by) / 2;
+    const by = b.y;                // top of target card
+    // Orthogonal L-routing: down to midpoint, horizontal, down. Keeps lines
+    // off of other cards in the lanes.
+    const midY = (ay + by) / 2;
     const path = document.createElementNS(svgNS, 'path');
-    path.setAttribute('d', `M ${ax} ${ay} C ${ax} ${mid}, ${bx} ${mid}, ${bx} ${by}`);
+    const d = ax === bx
+      ? `M ${ax} ${ay} L ${bx} ${by - 6}`
+      : `M ${ax} ${ay} L ${ax} ${midY} L ${bx} ${midY} L ${bx} ${by - 6}`;
+    path.setAttribute('d', d);
     path.setAttribute('class', 'connection');
     svg.appendChild(path);
     const arrow = document.createElementNS(svgNS, 'polygon');
-    arrow.setAttribute('points', `${bx-5},${by-8} ${bx+5},${by-8} ${bx},${by}`);
+    arrow.setAttribute('points', `${bx-5},${by-7} ${bx+5},${by-7} ${bx},${by}`);
     arrow.setAttribute('class', 'connection-arrow');
     svg.appendChild(arrow);
   }
+
+  // Draw a subtle dashed link from each check to the step whose output it
+  // references, so users see at a glance which step each assertion covers.
+  for (const check of state.checks) {
+    const ref = findReferencedStep(check.expr);
+    if (!ref) continue;
+    const rh = cardHeight(ref.id) || CARD_H_FALLBACK;
+    const from = { x: ref.x + CARD_W, y: ref.y + rh / 2 };
+    const to   = { x: check.x,         y: (check.y || 0) + 40 };
+    const path = document.createElementNS(svgNS, 'path');
+    const midX = (from.x + to.x) / 2;
+    path.setAttribute('d', `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`);
+    path.setAttribute('class', 'connection check-link');
+    svg.appendChild(path);
+  }
   return svg;
+}
+
+// Match stream('topic') / stream("topic") inside a CEL expression to a step.
+function findReferencedStep(expr) {
+  if (!expr) return null;
+  const m = /stream\(\s*['"]([^'"]+)['"]\s*\)/.exec(expr);
+  if (!m) return null;
+  const target = m[1];
+  return state.steps.find(s => expectedStream(s) === target);
 }
 
 function cardForStep(step) {
@@ -340,7 +399,38 @@ function wireFields(el, obj) {
   });
 }
 
-// ----- Dragging ------------------------------------------------------------
+// ----- Canvas pan ----------------------------------------------------------
+// Dragging anywhere on the empty canvas (not on a card) pans the view, so
+// the canvas feels infinite without hunting for scrollbars. Cursor flips to
+// grabbing on press.
+
+(function wireCanvasPan() {
+  let panning = false, startX, startY, scrollL, scrollT;
+  canvas.addEventListener('mousedown', e => {
+    // Only pan when the click hit the canvas itself (not a card).
+    if (e.target !== canvas) return;
+    panning = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    scrollL = canvas.scrollLeft;
+    scrollT = canvas.scrollTop;
+    canvas.classList.add('panning');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp, { once: true });
+  });
+  function onMove(e) {
+    if (!panning) return;
+    canvas.scrollLeft = scrollL - (e.clientX - startX);
+    canvas.scrollTop  = scrollT - (e.clientY - startY);
+  }
+  function onUp() {
+    panning = false;
+    canvas.classList.remove('panning');
+    document.removeEventListener('mousemove', onMove);
+  }
+})();
+
+// ----- Card dragging ------------------------------------------------------
 
 function wireDragCard(el, obj) {
   const header = el.querySelector('header');
@@ -446,24 +536,39 @@ document.getElementById('conn-grpc').addEventListener('input',  e => { state.con
 
 document.querySelectorAll('[data-add]').forEach(btn => {
   btn.addEventListener('click', () => {
-    const pos = nextFreeSlot();
+    const pos = nextFreeSlot('step');
     state.steps.push(TEMPLATES[btn.dataset.add](pos));
     render();
+    // Scroll the canvas so the new card is visible — users dropping into an
+    // existing flow shouldn't have to go hunt for what they just added.
+    scrollCardIntoView(state.steps[state.steps.length - 1]);
   });
 });
 document.getElementById('btn-add-check').addEventListener('click', () => {
-  const pos = nextFreeSlot();
+  const pos = nextFreeSlot('check');
   state.checks.push({ id: nextId(), name: `check-${state.checks.length + 1}`, expr: "size(stream('orders')) >= 1", severity: 'critical', x: pos.x, y: pos.y });
   render();
+  scrollCardIntoView(state.checks[state.checks.length - 1]);
 });
 
-function nextFreeSlot() {
-  const all = [...state.steps, ...state.checks];
-  if (all.length === 0) return { x: 40, y: 40 };
-  const idx = all.length;
-  const col = idx % 3;
-  const row = Math.floor(idx / 3);
-  return { x: 40 + col * COL_STEP, y: 40 + row * ROW_STEP };
+function scrollCardIntoView(c) {
+  const wrap = document.querySelector('.canvas-wrap .canvas');
+  if (!wrap || !c) return;
+  wrap.scrollTo({
+    left: Math.max(0, c.x - 60),
+    top:  Math.max(0, c.y - 60),
+    behavior: 'smooth',
+  });
+}
+
+// New card placement: append at the bottom of the step lane (or check lane
+// for a check). Keeps the default layout tidy while still letting the user
+// drag anywhere afterwards.
+function nextFreeSlot(kind) {
+  const lane = kind === 'check' ? LANE_CHECKS : LANE_STEPS;
+  const siblings = kind === 'check' ? state.checks : state.steps;
+  const maxY = siblings.reduce((m, c) => Math.max(m, (c.y || 0)), -ROW_STEP);
+  return { x: lane, y: maxY + ROW_STEP };
 }
 
 document.getElementById('btn-new').addEventListener('click', () => {
@@ -568,15 +673,18 @@ state.name = 'user-demo';
 state.connectors.kafka.bootstrap_servers = 'localhost:19092';
 state.connectors.http.base_url = 'http://localhost:18082';
 
+// Default demo layout: a single vertical chain of steps in the left lane,
+// with checks aligned in a parallel lane to the right. Arrows flow straight
+// down; no overlap, no crossings.
 state.steps = [
-  Object.assign(TEMPLATES.produce({ x: 40,  y: 40  }), { topic: 'user-demo-orders', payload: '${data.orders}', count: 25, name: 'place-orders' }),
-  Object.assign(TEMPLATES.consume({ x: 40,  y: 280 }), { topic: 'user-demo-orders', group: 'edt-builder', match: 'payload.amount >= 0', name: 'consume-back' }),
-  Object.assign(TEMPLATES.http   ({ x: 400, y: 40  }), { method: 'GET', path: '/status/200', name: 'gateway-healthz' }),
-  Object.assign(TEMPLATES.http   ({ x: 400, y: 280 }), { name: 'post-to-httpbin', method: 'POST', path: '/anything', body: '{"scenario":"user-demo"}' }),
+  Object.assign(TEMPLATES.produce({ x: LANE_STEPS, y: 40  }),      { topic: 'user-demo-orders', payload: '${data.orders}', count: 25, name: 'place-orders' }),
+  Object.assign(TEMPLATES.consume({ x: LANE_STEPS, y: 40 + ROW_STEP }),     { topic: 'user-demo-orders', group: 'edt-builder', match: 'payload.amount >= 0', name: 'consume-back' }),
+  Object.assign(TEMPLATES.http   ({ x: LANE_STEPS, y: 40 + ROW_STEP * 2 }), { method: 'GET', path: '/status/200', name: 'gateway-healthz' }),
+  Object.assign(TEMPLATES.http   ({ x: LANE_STEPS, y: 40 + ROW_STEP * 3 }), { name: 'post-to-httpbin', method: 'POST', path: '/anything', body: '{"scenario":"user-demo"}' }),
 ];
 state.checks = [
-  { id: nextId(), name: 'produced_orders', expr: "size(stream('user-demo-orders')) >= 25", severity: 'critical', x: 760, y: 40 },
-  { id: nextId(), name: 'httpbin_healthy', expr: "size(stream('http:/status/200')) >= 1",  severity: 'critical', x: 760, y: 280 },
+  { id: nextId(), name: 'produced_orders', expr: "size(stream('user-demo-orders')) >= 25", severity: 'critical', x: LANE_CHECKS, y: 40 },
+  { id: nextId(), name: 'httpbin_healthy', expr: "size(stream('http:/status/200')) >= 1",  severity: 'critical', x: LANE_CHECKS, y: 40 + ROW_STEP * 2 },
 ];
 
 render();
