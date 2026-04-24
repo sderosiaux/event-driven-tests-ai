@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,7 +26,7 @@ type Loop struct {
 	HandleAssignment  func(ctx context.Context, scenario string, yaml []byte) error
 	OnError           func(err error) // optional logger
 
-	id         string
+	id         atomic.Pointer[string]        // set once after Register; read concurrently
 	mu         sync.Mutex
 	dispatched map[string]context.CancelFunc // scenario → cancel for its goroutine
 	slots      chan struct{}                 // semaphore limiting concurrent runs
@@ -48,7 +49,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("worker: register: %w", err)
 	}
-	l.id = resp.WorkerID
+	l.id.Store(&resp.WorkerID)
 
 	if l.MaxConcurrentRuns <= 0 {
 		l.MaxConcurrentRuns = 16
@@ -74,12 +75,17 @@ func (l *Loop) Run(ctx context.Context) error {
 }
 
 // ID returns the worker id once registered. Empty before Run.
-func (l *Loop) ID() string { return l.id }
+func (l *Loop) ID() string {
+	if p := l.id.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
 
 func (l *Loop) tickOnce(ctx context.Context) {
 	hbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	resp, err := l.Client.Heartbeat(hbCtx, l.id)
+	resp, err := l.Client.Heartbeat(hbCtx, l.ID())
 	if err != nil {
 		l.OnError(fmt.Errorf("heartbeat: %w", err))
 		return
