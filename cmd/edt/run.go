@@ -17,6 +17,7 @@ import (
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/kafka"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/orchestrator"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/grpcc"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/reporter"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/ws"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
@@ -117,6 +118,11 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 	}
 	if ssePort != nil {
 		runner.SSE = ssePort
+	}
+	if s.Spec.Connectors.GRPC != nil {
+		gp := grpcc.NewPort()
+		defer gp.Close()
+		runner.GRPC = gp
 	}
 	if sc := srClientFor(s); sc != nil {
 		runner.Codec = sr.NewCodec(sc)

@@ -24,6 +24,7 @@ type Runner struct {
 	HTTP       HTTPPort
 	WebSocket  WebSocketPort                     // optional; required if any step.websocket present
 	SSE        SSEPort                           // optional; required if any step.sse present
+	GRPC       GRPCPort                          // optional; required if any step.grpc present
 	Codec      CodecPort                         // optional Schema Registry codec
 	Store      events.Store
 	Generators map[string]*data.FakerGenerator // keyed by data alias from scenario.Spec.Data
@@ -79,6 +80,8 @@ func (r *Runner) runStep(ctx context.Context, step *scenario.Step) error {
 		return r.runWebSocket(ctx, step)
 	case step.SSE != nil:
 		return r.runSSE(ctx, step)
+	case step.GRPC != nil:
+		return r.runGRPC(ctx, step)
 	case step.Sleep != "":
 		d, err := time.ParseDuration(step.Sleep)
 		if err != nil {

@@ -32,6 +32,21 @@ type Connectors struct {
 	Kafka     *KafkaConnector     `yaml:"kafka,omitempty" json:"kafka,omitempty"`
 	HTTP      *HTTPConnector      `yaml:"http,omitempty" json:"http,omitempty"`
 	WebSocket *WebSocketConnector `yaml:"websocket,omitempty" json:"websocket,omitempty"`
+	GRPC      *GRPCConnector      `yaml:"grpc,omitempty" json:"grpc,omitempty"`
+}
+
+// GRPCConnector points at one gRPC server. TLS defaults to off (plaintext);
+// Auth is a bearer token added as `authorization: Bearer <token>` metadata
+// on every RPC — the most common auth pattern for gateway-fronted services.
+type GRPCConnector struct {
+	Address string         `yaml:"address" json:"address"`
+	TLS     bool           `yaml:"tls,omitempty" json:"tls,omitempty"`
+	Auth    *GRPCAuth      `yaml:"auth,omitempty" json:"auth,omitempty"`
+}
+
+type GRPCAuth struct {
+	Type  string `yaml:"type" json:"type"` // bearer (M6); more later
+	Token string `yaml:"token,omitempty" json:"token,omitempty"`
 }
 
 // WebSocketConnector wires a scenario to a WebSocket endpoint. BaseURL must be
@@ -125,7 +140,29 @@ type Step struct {
 	HTTP      *HTTPStep          `yaml:"http,omitempty" json:"http,omitempty"`
 	WebSocket *WebSocketStep     `yaml:"websocket,omitempty" json:"websocket,omitempty"`
 	SSE       *SSEStep           `yaml:"sse,omitempty" json:"sse,omitempty"`
+	GRPC      *GRPCStep          `yaml:"grpc,omitempty" json:"grpc,omitempty"`
 	Sleep     string             `yaml:"sleep,omitempty" json:"sleep,omitempty"`
+}
+
+// GRPCStep drives a single unary RPC against connectors.grpc.
+//
+// The .proto source is supplied inline (Proto) or via file (ProtoFile).
+// Method is the fully-qualified name "package.Service/Method". Request is a
+// JSON document that is decoded into a dynamicpb.Message for the method's
+// input type; Expect compares the response to a caller-supplied shape
+// (similar to HTTPStep.Expect). Streaming RPCs are out of scope for M6-T2
+// and error clearly.
+type GRPCStep struct {
+	Proto     string          `yaml:"proto,omitempty" json:"proto,omitempty"`
+	ProtoFile string          `yaml:"proto_file,omitempty" json:"proto_file,omitempty"`
+	Method    string          `yaml:"method" json:"method"`
+	Request   string          `yaml:"request" json:"request"`
+	Expect    *GRPCExpect     `yaml:"expect,omitempty" json:"expect,omitempty"`
+}
+
+type GRPCExpect struct {
+	Code int                    `yaml:"code,omitempty" json:"code,omitempty"` // gRPC status code; 0 = OK
+	Body map[string]any         `yaml:"body,omitempty" json:"body,omitempty"`
 }
 
 // SSEStep subscribes to an HTTP Server-Sent Events stream and records each

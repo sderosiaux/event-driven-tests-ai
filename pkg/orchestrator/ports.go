@@ -8,6 +8,7 @@ package orchestrator
 import (
 	"context"
 
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/grpcc"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/httpc"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/kafka"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
@@ -61,6 +62,16 @@ type SSESession = httpc.Session
 
 // SSEEvent is one decoded Server-Sent Event, re-exported from pkg/httpc.
 type SSEEvent = httpc.SSEEvent
+
+// GRPCPort invokes a unary RPC against the configured connector. Open may
+// cache the underlying grpc.ClientConn across calls in a single scenario run.
+type GRPCPort interface {
+	Invoke(ctx context.Context, conn *scenario.GRPCConnector, step *scenario.GRPCStep) (*GRPCResponse, error)
+}
+
+// GRPCResponse re-exports grpcc.Invocation so tests and the orchestrator
+// share one name. Structurally equivalent.
+type GRPCResponse = grpcc.Invocation
 
 // CodecPort is the surface the orchestrator needs from a Schema Registry
 // codec: encode a Go value for a subject (produce) and decode a wire payload
