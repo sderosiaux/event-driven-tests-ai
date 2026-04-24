@@ -23,6 +23,7 @@ type Runner struct {
 	Kafka      KafkaPort
 	HTTP       HTTPPort
 	WebSocket  WebSocketPort                     // optional; required if any step.websocket present
+	SSE        SSEPort                           // optional; required if any step.sse present
 	Codec      CodecPort                         // optional Schema Registry codec
 	Store      events.Store
 	Generators map[string]*data.FakerGenerator // keyed by data alias from scenario.Spec.Data
@@ -76,6 +77,8 @@ func (r *Runner) runStep(ctx context.Context, step *scenario.Step) error {
 		return r.runHTTP(ctx, step)
 	case step.WebSocket != nil:
 		return r.runWebSocket(ctx, step)
+	case step.SSE != nil:
+		return r.runSSE(ctx, step)
 	case step.Sleep != "":
 		d, err := time.ParseDuration(step.Sleep)
 		if err != nil {

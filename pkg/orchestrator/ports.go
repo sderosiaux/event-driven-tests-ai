@@ -48,6 +48,20 @@ type WebSocketPort interface {
 // an implementor of the other.
 type WebSocketSession = ws.Session
 
+// SSEPort is the surface the orchestrator needs for Server-Sent Events.
+// Open starts a GET request with Accept: text/event-stream; the returned
+// SSESession yields events until ctx is cancelled or the server closes.
+type SSEPort interface {
+	Open(ctx context.Context, conn *scenario.HTTPConnector, step *scenario.SSEStep) (SSESession, error)
+}
+
+// SSESession re-exports httpc.Session so scenarios and tests share the one
+// name. Structurally equivalent; any implementor of one implements the other.
+type SSESession = httpc.Session
+
+// SSEEvent is one decoded Server-Sent Event, re-exported from pkg/httpc.
+type SSEEvent = httpc.SSEEvent
+
 // CodecPort is the surface the orchestrator needs from a Schema Registry
 // codec: encode a Go value for a subject (produce) and decode a wire payload
 // (consume). Nil is valid — scenarios without schema_registry use raw JSON.

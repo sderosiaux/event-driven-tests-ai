@@ -101,8 +101,11 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 		kp = kc
 	}
 	var hp orchestrator.HTTPPort
+	var ssePort orchestrator.SSEPort
 	if s.Spec.Connectors.HTTP != nil {
-		hp = httpc.NewClient(s.Spec.Connectors.HTTP)
+		cl := httpc.NewClient(s.Spec.Connectors.HTTP)
+		hp = cl
+		ssePort = httpc.NewSSEAdapter(cl)
 	}
 
 	// Orchestrate.
@@ -111,6 +114,9 @@ func doRun(ctx context.Context, stdout, stderr io.Writer, f *runFlags) error {
 	runner.RunID = runID
 	if s.Spec.Connectors.WebSocket != nil {
 		runner.WebSocket = ws.NewAdapter()
+	}
+	if ssePort != nil {
+		runner.SSE = ssePort
 	}
 	if sc := srClientFor(s); sc != nil {
 		runner.Codec = sr.NewCodec(sc)

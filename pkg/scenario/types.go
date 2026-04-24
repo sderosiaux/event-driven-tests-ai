@@ -124,7 +124,20 @@ type Step struct {
 	Consume   *ConsumeStep       `yaml:"consume,omitempty" json:"consume,omitempty"`
 	HTTP      *HTTPStep          `yaml:"http,omitempty" json:"http,omitempty"`
 	WebSocket *WebSocketStep     `yaml:"websocket,omitempty" json:"websocket,omitempty"`
+	SSE       *SSEStep           `yaml:"sse,omitempty" json:"sse,omitempty"`
 	Sleep     string             `yaml:"sleep,omitempty" json:"sleep,omitempty"`
+}
+
+// SSEStep subscribes to an HTTP Server-Sent Events stream and records each
+// event into the events store under stream name "sse:<path>". Uses the
+// existing HTTP connector (SSE is just HTTP with Accept: text/event-stream).
+// Semantics mirror ConsumeStep: Count bound, Timeout, CEL Match rules.
+type SSEStep struct {
+	Path     string       `yaml:"path" json:"path"`
+	Count    int          `yaml:"count,omitempty" json:"count,omitempty"` // 0 = wait for first match or timeout
+	Timeout  string       `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Match    []MatchRule  `yaml:"match,omitempty" json:"match,omitempty"`
+	SlowMode *SlowMode    `yaml:"slow_mode,omitempty" json:"slow_mode,omitempty"`
 }
 
 // WebSocketStep dials the connector, optionally sends a JSON message, then
