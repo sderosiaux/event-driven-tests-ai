@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/api"
+	"github.com/event-driven-tests-ai/edt/pkg/controlplane/mcp"
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/metrics"
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/storage"
 	"github.com/event-driven-tests-ai/edt/pkg/controlplane/ui"
@@ -142,6 +143,14 @@ func (s *Server) routes() {
 	s.router.Group(func(r chi.Router) {
 		r.Use(admin)
 		s.api.MountTokens(r)
+	})
+
+	// MCP server: JSON-RPC over POST /mcp. Gated as viewer — listing and
+	// reading state, never writing.
+	mcpServer := mcp.New(s.store)
+	s.router.Group(func(r chi.Router) {
+		r.Use(viewer)
+		r.Method(http.MethodPost, "/mcp", mcpServer.Handler())
 	})
 
 	// UI is always public (read-only).
