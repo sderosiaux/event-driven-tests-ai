@@ -152,11 +152,14 @@ func (e *Executor) RunInputs(ctx context.Context, s *scenario.Scenario, store ev
 	outStreams := s.Spec.AgentUnderTest.Produces
 
 	used := make(map[string]map[int]struct{}, len(outStreams))
+	noLowerBound := map[string]int{}
 	for i, in := range inputs {
 		if e.cfg.Iterations > 0 && i >= e.cfg.Iterations {
 			break
 		}
-		e.scorePair(ctx, s, store, in, outStreams, used, i)
+		if err := e.scorePair(ctx, s, store, in, outStreams, noLowerBound, used, i); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -188,41 +191,61 @@ func (e *Executor) RunIterations(ctx context.Context, s *scenario.Scenario, stor
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Snapshot input-stream cursors before reseeding so we only judge the
-		// events this iteration produced, not the cumulative backlog.
-		cursors := make(map[string]int, len(inStreams))
-		for _, topic := range inStreams {
-			cursors[topic] = len(store.Query(topic))
-		}
+		// Snapshot cursors on BOTH input and output streams before reseeding.
+		// waitForOutput then ignores any pre-iteration events, so a stale
+		// output from a previous iteration can never spuriously satisfy a
+		// newly seeded input that happens to share a key.
+		inCursors := snapshotCursors(store, inStreams)
+		outCursors := snapshotCursors(store, outStreams)
+
 		if err := reseed(ctx); err != nil {
 			return fmt.Errorf("eval iteration %d: reseed: %w", iter, err)
 		}
-		fresh := freshInputsAfter(store, inStreams, cursors)
+		fresh := freshInputsAfter(store, inStreams, inCursors)
 		if len(fresh) == 0 {
 			continue
 		}
 		for _, in := range fresh {
-			e.scorePair(ctx, s, store, in, outStreams, used, iter)
+			if err := e.scorePair(ctx, s, store, in, outStreams, outCursors, used, iter); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (e *Executor) scorePair(ctx context.Context, s *scenario.Scenario, store events.Store, in events.Event, outStreams []string, used map[string]map[int]struct{}, iter int) {
-	out, ok := waitForOutput(ctx, store, outStreams, in.Key, e.cfg.MatchTimeout, used)
-	if !ok {
+// scorePair runs one input through matching + judging. A real ctx cancel
+// surfaces as an error so RunIterations aborts instead of recording the whole
+// remaining backlog as missing-output samples.
+func (e *Executor) scorePair(ctx context.Context, s *scenario.Scenario, store events.Store, in events.Event, outStreams []string, lowerBounds map[string]int, used map[string]map[int]struct{}, iter int) error {
+	out, status := waitForOutput(ctx, store, outStreams, in.Key, e.cfg.MatchTimeout, lowerBounds, used)
+	switch status {
+	case matchHit:
+		e.Observe(ctx, s, Pair{
+			Input:  asMap(in.Payload),
+			Output: asMap(out.Payload),
+			Meta:   map[string]any{"scenario": s.Metadata.Name, "iteration": iter},
+		})
+		return nil
+	case matchTimeout:
 		e.Observe(ctx, s, Pair{
 			Input:  asMap(in.Payload),
 			Output: map[string]any{"_missing": true, "_reason": "no matching output within timeout"},
 			Meta:   map[string]any{"scenario": s.Metadata.Name, "iteration": iter},
 		})
-		return
+		return nil
+	case matchCancelled:
+		return ctx.Err()
 	}
-	e.Observe(ctx, s, Pair{
-		Input:  asMap(in.Payload),
-		Output: asMap(out.Payload),
-		Meta:   map[string]any{"scenario": s.Metadata.Name, "iteration": iter},
-	})
+	return nil
+}
+
+func snapshotCursors(st events.Store, streams []string) map[string]int {
+	out := make(map[string]int, len(streams))
+	for _, topic := range streams {
+		out[topic] = len(st.Query(topic))
+	}
+	return out
 }
 
 func validateAgent(s *scenario.Scenario) error {
@@ -248,35 +271,56 @@ func freshInputsAfter(st events.Store, streams []string, cursors map[string]int)
 	return out
 }
 
+// matchStatus distinguishes the three outcomes waitForOutput can return: a
+// successful match, a real timeout (record as missing), or context cancel
+// (abort the whole run, do not poison the aggregate).
+type matchStatus int
+
+const (
+	matchHit matchStatus = iota
+	matchTimeout
+	matchCancelled
+)
+
 // waitForOutput polls the store every 50ms for any event in outStreams whose
-// key matches. Small-poll is fine — the store is in-memory and the executor
-// is the only writer-serialization boundary.
-func waitForOutput(ctx context.Context, store events.Store, streams []string, key string, timeout time.Duration, used map[string]map[int]struct{}) (events.Event, bool) {
+// key matches. lowerBounds[stream] is the per-iteration "ignore everything
+// before this index" cursor so stale outputs from previous iterations can't
+// satisfy newly seeded inputs that share a key.
+//
+// Small-poll is fine — the store is in-memory and the executor is the only
+// writer-serialization boundary.
+func waitForOutput(ctx context.Context, store events.Store, streams []string, key string, timeout time.Duration, lowerBounds map[string]int, used map[string]map[int]struct{}) (events.Event, matchStatus) {
 	deadline := time.Now().Add(timeout)
 	for {
+		if err := ctx.Err(); err != nil {
+			return events.Event{}, matchCancelled
+		}
 		for _, name := range streams {
 			seen := used[name]
-			for idx, e := range store.Query(name) {
+			start := lowerBounds[name]
+			all := store.Query(name)
+			for idx := start; idx < len(all); idx++ {
 				if _, ok := seen[idx]; ok {
 					continue
 				}
+				e := all[idx]
 				if e.Key == key {
 					if seen == nil {
 						seen = map[int]struct{}{}
 						used[name] = seen
 					}
 					seen[idx] = struct{}{}
-					return e, true
+					return e, matchHit
 				}
 			}
 		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return events.Event{}, false
+		if time.Now().After(deadline) {
+			return events.Event{}, matchTimeout
 		}
 		select {
 		case <-time.After(50 * time.Millisecond):
 		case <-ctx.Done():
-			return events.Event{}, false
+			return events.Event{}, matchCancelled
 		}
 	}
 }

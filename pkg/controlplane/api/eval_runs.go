@@ -36,6 +36,7 @@ type evalRunRequest struct {
 
 type evalResultWire struct {
 	Name            string  `json:"name"`
+	JudgeModel      string  `json:"judge_model,omitempty"`
 	Aggregate       string  `json:"aggregate,omitempty"`
 	Samples         int     `json:"samples"`
 	RequiredSamples int     `json:"required_samples,omitempty"`
@@ -78,6 +79,7 @@ func (a *API) ingestEvalRun(w http.ResponseWriter, r *http.Request) {
 	for i, e := range req.Results {
 		rows[i] = storage.EvalResult{
 			Name:            e.Name,
+			JudgeModel:      e.JudgeModel,
 			Aggregate:       e.Aggregate,
 			Samples:         e.Samples,
 			RequiredSamples: e.RequiredSamples,
@@ -149,6 +151,7 @@ func evalRowsToWire(rows []storage.EvalResult) []map[string]any {
 	for i, r := range rows {
 		out[i] = map[string]any{
 			"name":             r.Name,
+			"judge_model":      r.JudgeModel,
 			"aggregate":        r.Aggregate,
 			"samples":          r.Samples,
 			"required_samples": r.RequiredSamples,

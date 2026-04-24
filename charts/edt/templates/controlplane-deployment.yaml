@@ -43,6 +43,13 @@ spec:
                   name: {{ include "edt.adminSecretName" . }}
                   key: admin-token
             {{- end }}
+            {{- if .Values.controlPlane.workerToken }}
+            - name: EDT_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "edt.workerSecretName" . }}
+                  key: worker-token
+            {{- end }}
             {{- if .Values.controlPlane.dbURL }}
             - name: EDT_DB_URL
               value: {{ .Values.controlPlane.dbURL | quote }}

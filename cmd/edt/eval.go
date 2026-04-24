@@ -175,10 +175,11 @@ func produceOnlyScenario(s *scenario.Scenario) *scenario.Scenario {
 
 func pushEvalReport(ctx context.Context, f *evalFlags, s *scenario.Scenario, results []eval.Result, startedAt, finishedAt time.Time, stderr io.Writer) error {
 	client := reporter.New(f.reportTo, f.reportToken)
+	perEvalModels := resolvePerEvalModels(s, f.model)
 	req := reporter.EvalRunRequest{
 		ID:         evalRunID(startedAt),
 		Scenario:   s.Metadata.Name,
-		JudgeModel: resolveJudgeModel(s, f.model),
+		JudgeModel: rollUpJudgeModel(perEvalModels),
 		Iterations: f.iterations,
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
@@ -188,6 +189,7 @@ func pushEvalReport(ctx context.Context, f *evalFlags, s *scenario.Scenario, res
 	for _, r := range results {
 		req.Results = append(req.Results, reporter.EvalResultWire{
 			Name:            r.Eval,
+			JudgeModel:      perEvalModels[r.Eval],
 			Aggregate:       r.Aggregate,
 			Samples:         r.Over,
 			RequiredSamples: r.RequiredOver,
@@ -210,16 +212,42 @@ func evalRunID(t time.Time) string {
 	return "eval-" + t.UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
 }
 
-func resolveJudgeModel(s *scenario.Scenario, override string) string {
-	if override != "" {
-		return override
-	}
+// resolvePerEvalModels maps each eval.name → the judge model actually used for
+// that eval. The CLI --judge-model override wins over everything; otherwise
+// each eval's own scenario.judge.model is honoured. Scenarios can legitimately
+// mix models (e.g. a cheaper model for coarse checks, Opus for nuance), so
+// this must be per-eval, not a single run-wide value.
+func resolvePerEvalModels(s *scenario.Scenario, override string) map[string]string {
+	out := make(map[string]string, len(s.Spec.Evals))
 	for _, ev := range s.Spec.Evals {
-		if ev.Judge != nil && ev.Judge.Model != "" {
-			return ev.Judge.Model
+		if override != "" {
+			out[ev.Name] = override
+			continue
+		}
+		if ev.Judge != nil {
+			out[ev.Name] = ev.Judge.Model
 		}
 	}
-	return ""
+	return out
+}
+
+// rollUpJudgeModel returns the single model used across the run, or "mixed"
+// when the run involved more than one. Empty when no evals declared models.
+func rollUpJudgeModel(perEval map[string]string) string {
+	seen := ""
+	for _, m := range perEval {
+		if m == "" {
+			continue
+		}
+		if seen == "" {
+			seen = m
+			continue
+		}
+		if m != seen {
+			return "mixed"
+		}
+	}
+	return seen
 }
 
 // summariseStatus rolls the per-eval statuses into a single run-level verdict:

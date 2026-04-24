@@ -52,6 +52,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-admin-token" (include "edt.fullname" .) -}}
 {{- end -}}
 
+{{- define "edt.workerSecretName" -}}
+{{- printf "%s-worker-token" (include "edt.fullname" .) -}}
+{{- end -}}
+
 {{- define "edt.controlPlaneURL" -}}
 {{- printf "http://%s-controlplane:%d" (include "edt.fullname" .) (.Values.controlPlane.service.port | int) -}}
 {{- end -}}

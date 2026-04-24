@@ -20,6 +20,9 @@ func newServeCmd() *cobra.Command {
 			if cfg.AdminToken == "" {
 				cfg.AdminToken = os.Getenv("EDT_ADMIN_TOKEN")
 			}
+			if cfg.WorkerToken == "" {
+				cfg.WorkerToken = os.Getenv("EDT_WORKER_TOKEN")
+			}
 			if cfg.DBURL == "" {
 				cfg.DBURL = os.Getenv("EDT_DB_URL")
 			}
@@ -34,5 +37,6 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.DBURL, "db-url", "", "Postgres connection string (empty = in-memory dev mode)")
 	cmd.Flags().BoolVar(&cfg.RequireAuth, "require-auth", false, "Require a valid bearer token on mutating endpoints")
 	cmd.Flags().StringVar(&cfg.AdminToken, "admin-token", "", "Bootstrap admin token (also via EDT_ADMIN_TOKEN env)")
+	cmd.Flags().StringVar(&cfg.WorkerToken, "worker-token", "", "Bootstrap worker-scoped token (also via EDT_WORKER_TOKEN env)")
 	return cmd
 }

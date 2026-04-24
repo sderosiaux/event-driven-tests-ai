@@ -26,6 +26,7 @@ type Config struct {
 	DBURL       string // Postgres connection string; empty = run with no storage (dev only)
 	RequireAuth bool   // enforce bearer-token role middleware on mutating endpoints
 	AdminToken  string // bootstrap admin bearer token (also via EDT_ADMIN_TOKEN)
+	WorkerToken string // bootstrap worker-scoped bearer token (also via EDT_WORKER_TOKEN)
 	Logger      func(format string, args ...any)
 }
 
@@ -98,18 +99,25 @@ func NewServerWithStorage(cfg Config, store storage.Storage) *Server {
 	return s
 }
 
-// bootstrapAdmin seeds the configured admin token on startup so the server
-// can require auth from the very first request.
+// bootstrapAdmin seeds the configured admin + worker tokens on startup so the
+// server can enforce auth from the very first request. Workers should use
+// their scoped token — the admin token grants scenario mutation and token
+// issuance that workers never need (least-privilege).
 func (s *Server) bootstrapAdmin() {
-	if s.cfg.AdminToken == "" {
+	s.bootstrapToken(s.cfg.AdminToken, storage.RoleAdmin, "bootstrap-admin")
+	s.bootstrapToken(s.cfg.WorkerToken, storage.RoleWorker, "bootstrap-worker")
+}
+
+func (s *Server) bootstrapToken(plaintext string, role storage.Role, note string) {
+	if plaintext == "" {
 		return
 	}
-	t, err := s.store.IssueTokenWithPlaintext(context.Background(), s.cfg.AdminToken, storage.RoleAdmin, "bootstrap")
+	t, err := s.store.IssueTokenWithPlaintext(context.Background(), plaintext, role, note)
 	if err != nil {
-		s.cfg.Logger("bootstrap admin token: %v", err)
+		s.cfg.Logger("bootstrap %s token: %v", role, err)
 		return
 	}
-	s.cfg.Logger("bootstrap admin token id=%s installed", t.ID)
+	s.cfg.Logger("bootstrap %s token id=%s installed", role, t.ID)
 }
 
 func (s *Server) routes() {

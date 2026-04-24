@@ -10,7 +10,11 @@ Then open:
 {{- if not .Values.controlPlane.adminToken }}
 
 Auth is disabled (no controlPlane.adminToken set). Do not expose the control plane publicly without enabling auth:
-  helm upgrade edt ./charts/edt --reuse-values --set controlPlane.adminToken=$(openssl rand -hex 32)
+  helm upgrade edt ./charts/edt --reuse-values \
+    --set controlPlane.adminToken=$(openssl rand -hex 32) \
+    --set controlPlane.workerToken=$(openssl rand -hex 32)
+
+Workers use a separate worker-scoped token (RoleWorker, not admin) when controlPlane.workerToken is set.
 {{- end }}
 
 Workers: {{ .Values.worker.replicaCount }} replica(s) assigned by the control plane. Submit scenarios:

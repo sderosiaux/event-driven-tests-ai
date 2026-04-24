@@ -95,11 +95,15 @@ func buildAuthOpts(auth *scenario.KafkaAuth) ([]kgo.Opt, error) {
 // invoke the fetcher on every new SASL session without amplifying IMDS load.
 func awsIAMMechanism(auth *scenario.KafkaAuth) (sasl.Mechanism, error) {
 	if auth.Username != "" && auth.Password != "" {
+		// Scenario-supplied credentials are kept isolated from the ambient
+		// environment. An AWS_SESSION_TOKEN left over on the host must not
+		// be silently paired with a different access/secret pair — that mix
+		// produces stale-token auth failures after the ambient session
+		// expires.
 		creds := aws.Auth{
-			AccessKey:    auth.Username,
-			SecretKey:    auth.Password,
-			SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
-			UserAgent:    "edt/" + auth.Region,
+			AccessKey: auth.Username,
+			SecretKey: auth.Password,
+			UserAgent: "edt/" + auth.Region,
 		}
 		return creds.AsManagedStreamingIAMMechanism(), nil
 	}

@@ -66,3 +66,31 @@ jobs:
           test -s /tmp/default.yaml && test -s /tmp/full.yaml
           grep -q 'kind: Deployment' /tmp/default.yaml
           grep -q 'kind: ServiceMonitor' /tmp/full.yaml
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate chart-rendered flags against edt binary
+        # Extract the worker args the chart renders and pass them all to
+        # `edt worker --help` style parsing. Catches chart-to-CLI drift
+        # (codex P0 2026-04-24: --eval-interval did not exist on the worker).
+        run: |
+          go build -o /tmp/edt ./cmd/edt
+          python3 <<'PY'
+          import re, subprocess, sys, yaml
+          with open('/tmp/default.yaml') as f:
+              docs = list(yaml.safe_load_all(f))
+          workers = [d for d in docs if d and d.get('kind') == 'Deployment'
+                     and d['metadata']['labels'].get('app.kubernetes.io/component') == 'worker']
+          assert len(workers) == 1, f"expected 1 worker Deployment, got {len(workers)}"
+          args = workers[0]['spec']['template']['spec']['containers'][0]['args']
+          # Strip values, keep only flag names.
+          flags = [a.split('=')[0] for a in args if a.startswith('--')]
+          help_out = subprocess.check_output(['/tmp/edt', 'worker', '--help'], text=True)
+          for flag in flags:
+              if flag not in help_out:
+                  print(f"CHART-CLI DRIFT: worker Deployment renders {flag} but edt worker does not accept it")
+                  print(help_out)
+                  sys.exit(1)
+          print(f"verified {len(flags)} worker flags against the binary")
+          PY

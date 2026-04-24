@@ -76,15 +76,9 @@ function usage(): void {
 async function loadTS(path: string): Promise<unknown> {
   // tsx exposes an ESM loader hook. Register it once, then dynamic-import the
   // user's file as a file:// URL so relative imports inside their file work.
+  let api: typeof import("tsx/esm/api");
   try {
-    const api = await import("tsx/esm/api");
-    const unregister = api.register();
-    try {
-      const url = pathToFileURL(resolve(path)).href;
-      return await import(url);
-    } finally {
-      unregister();
-    }
+    api = await import("tsx/esm/api");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ERR_MODULE_NOT_FOUND") {
       die(
@@ -92,6 +86,16 @@ async function loadTS(path: string): Promise<unknown> {
       );
     }
     throw err;
+  }
+  const unregister = api.register();
+  try {
+    const url = pathToFileURL(resolve(path)).href;
+    // ERR_MODULE_NOT_FOUND from the user's module graph must surface as-is,
+    // not get rewritten to "tsx runtime is missing". Only the outer import
+    // of tsx itself is gated by the tsx-missing diagnostic above.
+    return await import(url);
+  } finally {
+    unregister();
   }
 }
 

@@ -32,7 +32,7 @@ spec:
           args:
             - worker
             - --control-plane={{ include "edt.controlPlaneURL" . }}
-            {{- if .Values.controlPlane.adminToken }}
+            {{- if .Values.controlPlane.workerToken }}
             - --token=$(EDT_TOKEN)
             {{- end }}
             {{- range $k, $v := .Values.worker.labels }}
@@ -44,16 +44,16 @@ spec:
             {{- if .Values.worker.loopInterval }}
             - --loop-interval={{ .Values.worker.loopInterval }}
             {{- end }}
-            {{- if .Values.worker.evalInterval }}
-            - --eval-interval={{ .Values.worker.evalInterval }}
+            {{- if .Values.worker.reportInterval }}
+            - --report-interval={{ .Values.worker.reportInterval }}
             {{- end }}
           env:
-            {{- if .Values.controlPlane.adminToken }}
+            {{- if .Values.controlPlane.workerToken }}
             - name: EDT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "edt.adminSecretName" . }}
-                  key: admin-token
+                  name: {{ include "edt.workerSecretName" . }}
+                  key: worker-token
             {{- end }}
             {{- with .Values.worker.extraEnv }}
             {{- toYaml . | nindent 12 }}

@@ -53,6 +53,7 @@ type EvalRunRequest struct {
 // storage.EvalResult shape on the wire.
 type EvalResultWire struct {
 	Name            string  `json:"name"`
+	JudgeModel      string  `json:"judge_model,omitempty"`
 	Aggregate       string  `json:"aggregate,omitempty"`
 	Samples         int     `json:"samples"`
 	RequiredSamples int     `json:"required_samples,omitempty"`

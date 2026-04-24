@@ -206,6 +206,74 @@ func TestRunIterationsStopsOnReseedError(t *testing.T) {
 	assert.Equal(t, 0, judge.calls, "no pair should be judged if reseed fails on iteration 0")
 }
 
+// Codex P1 2026-04-24: a stale output from iteration N-1 could match a newly
+// seeded input in iteration N if both share a key. Output cursor snapshot
+// must hide pre-iteration events so each iteration waits for its OWN output
+// and eventually times out, rather than silently reusing stale backlog.
+func TestRunIterationsIgnoresStaleOutputsFromPreviousIterations(t *testing.T) {
+	store := events.NewMemStore(0)
+
+	// Pre-seed: an "output" with key "repeat" already exists on the produces
+	// topic, from before any eval iteration runs. A buggy matcher would let
+	// this silently pair with whatever iteration-N input carries the same key.
+	store.Append(events.Event{Stream: "orders.triaged", Key: "repeat", Ts: time.Now(), Payload: map[string]any{"stale": true}, Direction: events.Produced})
+
+	var seenStale bool
+	judge := &stubJudge{scoreFor: func(p eval.Pair) eval.Score {
+		if p.Output["stale"] == true {
+			seenStale = true
+		}
+		return eval.Score{Value: 5}
+	}}
+	exec := eval.New(eval.Config{Judge: judge, MatchTimeout: 30 * time.Millisecond})
+
+	// Reseed produces a fresh input + a fresh output, BOTH keyed "repeat".
+	// The fresh output arrives after the input, so a correct matcher picks it.
+	// The buggy matcher picks the pre-existing stale one.
+	reseed := func(_ context.Context) error {
+		now := time.Now()
+		store.Append(events.Event{Stream: "orders.new", Key: "repeat", Ts: now, Payload: map[string]any{"fresh": true}, Direction: events.Produced})
+		store.Append(events.Event{Stream: "orders.triaged", Key: "repeat", Ts: now.Add(time.Millisecond), Payload: map[string]any{"fresh": true}, Direction: events.Produced})
+		return nil
+	}
+
+	require.NoError(t, exec.RunIterations(context.Background(), mkScenario(), store, reseed, 1))
+	assert.False(t, seenStale, "pre-iteration output must be invisible to this iteration's matcher")
+}
+
+// Codex P1 2026-04-24: context cancel during RunIterations must abort, not
+// silently score the remaining pending inputs as _missing and poison the
+// aggregate.
+func TestRunIterationsPropagatesCancellationInsteadOfPoisoningAggregate(t *testing.T) {
+	store := events.NewMemStore(0)
+	judge := &stubJudge{scoreFor: func(p eval.Pair) eval.Score {
+		if p.Output["_missing"] == true {
+			// If this ever fires, the matcher turned cancel into a fake sample.
+			t.Fatalf("cancellation must not produce _missing observations")
+		}
+		return eval.Score{Value: 5}
+	}}
+	exec := eval.New(eval.Config{Judge: judge, MatchTimeout: 2 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel 20ms after the loop starts: reseed has fired but waitForOutput
+	// is still in its poll loop with no output on the produces topic.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	reseed := func(_ context.Context) error {
+		now := time.Now()
+		store.Append(events.Event{Stream: "orders.new", Key: "k", Ts: now, Payload: map[string]any{}, Direction: events.Produced})
+		return nil
+	}
+
+	err := exec.RunIterations(ctx, mkScenario(), store, reseed, 5)
+	require.Error(t, err, "ctx cancellation must bubble up as an error")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestRunIterationsSkipsIterationsThatProduceNoFreshInputs(t *testing.T) {
 	store := events.NewMemStore(0)
 	judge := &stubJudge{scoreFor: func(eval.Pair) eval.Score { return eval.Score{Value: 5} }}

@@ -65,6 +65,7 @@ type EvalRun struct {
 type EvalResult struct {
 	RunID           string
 	Name            string
+	JudgeModel      string // per-eval judge model; run-level model is the rollup
 	Aggregate       string
 	Samples         int
 	RequiredSamples int

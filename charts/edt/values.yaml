@@ -35,10 +35,17 @@ controlPlane:
   enabled: true
   replicaCount: 1
 
-  ## Bearer token the CLI and workers use when --require-auth is on.
-  ## Leave unset to disable auth (dev only). When set, a Secret is created
-  ## and injected as EDT_ADMIN_TOKEN.
+  ## Bearer token granting full admin rights (scenario mutation, token
+  ## issuance, auth enforcement). Used by the CLI. Leave unset to disable
+  ## auth (dev only). When set, a Secret is created and injected as
+  ## EDT_ADMIN_TOKEN.
   adminToken: ""
+
+  ## Bearer token scoped to RoleWorker (register, heartbeat, report writes).
+  ## Workers use this instead of the admin token. Created as its own Secret
+  ## and injected as EDT_WORKER_TOKEN so the CP bootstraps both roles on
+  ## startup. When unset and adminToken is also unset, auth is off entirely.
+  workerToken: ""
 
   ## Postgres DSN, e.g. postgres://edt:secret@postgres/edt?sslmode=disable.
   ## Leave empty for the in-memory store (NOT persisted across restarts —
@@ -80,7 +87,7 @@ worker:
 
   ## Intervals for watch-mode loops (set to 0 to keep defaults).
   loopInterval: 5s
-  evalInterval: 1m
+  reportInterval: 30s
 
   resources:
     requests:
