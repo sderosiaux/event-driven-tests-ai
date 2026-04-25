@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 )
 
 // MountEvalRunReads attaches read-only eval-run routes.
@@ -108,10 +109,22 @@ func (a *API) getEvalRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, statusForStorageErr(err), err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"run":     evalRunToWire(run),
 		"results": evalRowsToWire(rows),
-	})
+	}
+	// Attach the scenario's eval blocks (rubric / judge / threshold) and the
+	// agent_under_test topology when available — without this the detail
+	// page can only render summary numbers, not the prompts that produced
+	// them. We swallow scenario-load errors: the detail view still renders
+	// usable summary data even if the source scenario was deleted.
+	if scn, err := a.Store.GetScenario(r.Context(), run.Scenario); err == nil {
+		if parsed, perr := scenario.Parse(scn.YAML); perr == nil {
+			out["agent_under_test"] = parsed.Spec.AgentUnderTest
+			out["evals"] = parsed.Spec.Evals
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *API) listEvalRuns(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +162,7 @@ func evalRunToWire(r storage.EvalRun) map[string]any {
 func evalRowsToWire(rows []storage.EvalResult) []map[string]any {
 	out := make([]map[string]any, len(rows))
 	for i, r := range rows {
-		out[i] = map[string]any{
+		row := map[string]any{
 			"name":             r.Name,
 			"judge_model":      r.JudgeModel,
 			"aggregate":        r.Aggregate,
@@ -161,6 +174,16 @@ func evalRowsToWire(rows []storage.EvalResult) []map[string]any {
 			"status":           r.Status,
 			"errors":           r.Errors,
 		}
+		// Decode the samples blob into structured JSON when present so the
+		// UI doesn't have to double-parse. Tolerate malformed blobs by
+		// dropping the field — never break the page over bad samples.
+		if len(r.SamplesJSON) > 0 {
+			var decoded any
+			if err := json.Unmarshal(r.SamplesJSON, &decoded); err == nil {
+				row["transcripts"] = decoded
+			}
+		}
+		out[i] = row
 	}
 	return out
 }

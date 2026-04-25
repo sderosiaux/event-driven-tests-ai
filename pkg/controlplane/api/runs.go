@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/checks"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/controlplane/storage"
 	"github.com/sderosiaux/event-driven-tests-ai/pkg/report"
+	"github.com/sderosiaux/event-driven-tests-ai/pkg/scenario"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -115,10 +117,66 @@ func (a *API) getRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, statusForStorageErr(err), err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"run":    runToWire(run),
 		"checks": checkRowsToWire(checkRows),
-	})
+	}
+	// Surface the scenario's step list so the detail page can render an
+	// execution outline (one row per step with its topic/path) instead of
+	// just an aggregate event count. We don't currently persist per-step
+	// timing — the executor would need to instrument that — so the rows
+	// are descriptive rather than measured.
+	if scn, err := a.Store.GetScenario(r.Context(), run.Scenario); err == nil {
+		if parsed, perr := scenario.Parse(scn.YAML); perr == nil {
+			out["steps"] = stepsToWire(parsed.Spec.Steps)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// stepsToWire flattens parsed scenario steps into a UI-friendly summary:
+// kind ("produce"|"http"|...), name, and a "where" string (topic, path,
+// service.method, or duration). Keeps the JS renderer dumb.
+func stepsToWire(steps []scenario.Step) []map[string]any {
+	out := make([]map[string]any, 0, len(steps))
+	for _, s := range steps {
+		row := map[string]any{"name": s.Name}
+		switch {
+		case s.Produce != nil:
+			row["kind"] = "produce"
+			row["where"] = s.Produce.Topic
+			row["meta"] = fmt.Sprintf("%d msgs", s.Produce.Count)
+			if s.Produce.Rate != "" {
+				row["meta"] = row["meta"].(string) + " @ " + s.Produce.Rate
+			}
+		case s.Consume != nil:
+			row["kind"] = "consume"
+			row["where"] = s.Consume.Topic
+			row["meta"] = "group=" + s.Consume.Group + " timeout=" + s.Consume.Timeout
+		case s.HTTP != nil:
+			row["kind"] = "http"
+			row["where"] = s.HTTP.Method + " " + s.HTTP.Path
+			if s.HTTP.Expect != nil && s.HTTP.Expect.Status != 0 {
+				row["meta"] = fmt.Sprintf("expect %d", s.HTTP.Expect.Status)
+			}
+		case s.WebSocket != nil:
+			row["kind"] = "websocket"
+			row["where"] = s.WebSocket.Path
+			row["meta"] = "timeout=" + s.WebSocket.Timeout
+		case s.SSE != nil:
+			row["kind"] = "sse"
+			row["where"] = s.SSE.Path
+			row["meta"] = "timeout=" + s.SSE.Timeout
+		case s.GRPC != nil:
+			row["kind"] = "grpc"
+			row["where"] = s.GRPC.Method
+		case s.Sleep != "":
+			row["kind"] = "sleep"
+			row["where"] = s.Sleep
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 func (a *API) listRuns(w http.ResponseWriter, r *http.Request) {

@@ -74,6 +74,11 @@ type EvalResult struct {
 	Passed          bool
 	Status          string // pass | fail | insufficient_samples | judge_errors
 	Errors          int
+	// SamplesJSON is an optional JSON blob holding per-iteration transcripts
+	// (input → agent output → judge score + reasoning). Empty when the
+	// executor wasn't asked to persist samples; the eval detail page falls
+	// back to summary numbers in that case.
+	SamplesJSON []byte
 }
 
 // CheckResult is the per-check row used to power SLO queries.

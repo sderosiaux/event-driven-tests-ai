@@ -176,6 +176,7 @@ func (s *Server) routes() {
 	s.router.Get("/ui/runs", s.serveIndex)
 	s.router.Get("/ui/runs/{id}", s.serveIndex)
 	s.router.Get("/ui/evals", s.serveIndex)
+	s.router.Get("/ui/evals/{id}", s.serveIndex)
 	s.router.Get("/ui/workers", s.serveIndex)
 	s.router.Get("/ui/builder", s.serveBuilder)
 }

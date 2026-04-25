@@ -323,10 +323,14 @@ func (s *PGStore) RecordEvalRun(ctx context.Context, r EvalRun, results []EvalRe
 		return err
 	}
 	for _, res := range results {
+		var samplesArg any
+		if len(res.SamplesJSON) > 0 {
+			samplesArg = res.SamplesJSON
+		}
 		if _, err := tx.Exec(ctx, `
-            INSERT INTO eval_results (run_id, name, judge_model, aggregate, samples, required_samples, value, threshold, passed, status, errors)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        `, r.ID, res.Name, res.JudgeModel, res.Aggregate, res.Samples, res.RequiredSamples, res.Value, res.Threshold, res.Passed, res.Status, res.Errors); err != nil {
+            INSERT INTO eval_results (run_id, name, judge_model, aggregate, samples, required_samples, value, threshold, passed, status, errors, samples_json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `, r.ID, res.Name, res.JudgeModel, res.Aggregate, res.Samples, res.RequiredSamples, res.Value, res.Threshold, res.Passed, res.Status, res.Errors, samplesArg); err != nil {
 			return err
 		}
 	}
@@ -346,7 +350,7 @@ func (s *PGStore) GetEvalRun(ctx context.Context, id string) (EvalRun, []EvalRes
 		return EvalRun{}, nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
-        SELECT name, judge_model, aggregate, samples, required_samples, value, threshold, passed, status, errors
+        SELECT name, judge_model, aggregate, samples, required_samples, value, threshold, passed, status, errors, samples_json
         FROM eval_results WHERE run_id = $1 ORDER BY name
     `, id)
 	if err != nil {
@@ -357,9 +361,11 @@ func (s *PGStore) GetEvalRun(ctx context.Context, id string) (EvalRun, []EvalRes
 	for rows.Next() {
 		var res EvalResult
 		res.RunID = id
-		if err := rows.Scan(&res.Name, &res.JudgeModel, &res.Aggregate, &res.Samples, &res.RequiredSamples, &res.Value, &res.Threshold, &res.Passed, &res.Status, &res.Errors); err != nil {
+		var samplesJSON []byte
+		if err := rows.Scan(&res.Name, &res.JudgeModel, &res.Aggregate, &res.Samples, &res.RequiredSamples, &res.Value, &res.Threshold, &res.Passed, &res.Status, &res.Errors, &samplesJSON); err != nil {
 			return r, nil, err
 		}
+		res.SamplesJSON = samplesJSON
 		out = append(out, res)
 	}
 	return r, out, rows.Err()
