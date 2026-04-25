@@ -37,6 +37,14 @@ docker compose -f examples/demo/docker-compose.yaml up --build
 
 Brings up Redpanda, the control plane on http://localhost:8080, and runs a scenario that produces 20 orders and checks them. Full walkthrough in [`examples/demo/`](examples/demo/).
 
+Or just boot the control plane against a populated demo store — no Kafka required to explore the UI:
+
+```bash
+edt serve --addr :8080 --seed-dir examples/showcase --seed-demo
+```
+
+`--seed-demo` registers a virtual worker, synthesises a handful of pass/fail runs against the [`examples/showcase/`](examples/showcase/) scenarios, and seeds three LLM-eval runs (`llm-summary-quality`, `rag-answer-quality`, `sentiment-classifier-quality`) with rubrics + per-iteration transcripts so the Eval detail pages show real-shaped data.
+
 Install locally and run against any Kafka you already have:
 
 ```bash
@@ -165,7 +173,7 @@ The control plane exposes:
 - `GET /api/v1/scenarios/{name}/slo?window=1h` — pass-rate per check
 - `GET /metrics` — Prometheus scrape target (workers push, control plane exposes)
 - `POST /mcp` — JSON-RPC MCP server for Claude Desktop / Claude Code / Cursor, read-only by default with an opt-in write policy for `upsert_scenario` / `assign_scenario`
-- Embedded web UI at `/` — scenarios, runs, evals, workers, no build step
+- Embedded web UI at `/` — scenarios list (with last-run pill + step/check/eval chips), free-form **scenario builder** (drag-to-position cards, family-tinted arrows, live YAML preview, drag-resize + collapse), run detail (execution outline + per-check verdicts), eval detail (agent topology + rubric + threshold gap + per-iteration transcripts), workers. Vanilla HTML/CSS/JS, no build step.
 
 ## What's supported today
 
@@ -180,6 +188,7 @@ Connectors:
 Scenario authoring:
 
 - Canonical YAML DSL (`apiVersion: edt.io/v1`) — [the full schema reflects through `edt validate`](cmd/edt/validate.go)
+- Visual builder (`/ui/builder`) — free-form canvas, family-colored cards (Kafka indigo, HTTP/gRPC amber, WebSocket/SSE teal, sleep slate, checks plum), drag to reorder, orthogonal arrows, live YAML preview with syntax highlighting, **Run live** button that executes the current scenario in-process and overlays per-card verdicts
 - TypeScript SDK (`@event-driven-tests-ai/sdk`) with fluent builder + `edt-ts compile` CLI
 - Schema Registry (Confluent + Apicurio compat mode): Avro, JSON Schema, and Protobuf (inline `.proto` text; SR references land in M7)
 - CEL-based checks with streaming operators: `stream`, `latency`, `percentile`, `rate`, `before`, `forall`/`exists`
@@ -187,13 +196,20 @@ Scenario authoring:
 - Failure injection: `fail_rate`, `fail_mode` (timeout, schema violation, broker unavailable), slow consumers
 - `${run.id}` / `${previous.*}` interpolation across topic, group, path, body, gRPC request
 
+Eval mode (`spec.agent_under_test` + `spec.evals[]`):
+
+- LLM judge via Anthropic API (`pkg/eval/anthropic.go`); rubric + threshold + aggregator (avg/p50/p95/min/max) per eval; CLI: `edt eval --file s.yaml --iterations 50`
+- Showcase scenarios in [`examples/showcase/`](examples/showcase/): support-ticket summarizer (faithfulness + conciseness), RAG answerer (groundedness + answer relevance + refusal calibration), sentiment classifier (label accuracy + confidence calibration)
+- Eval detail UI shows agent topology, full rubric prompt, threshold gap (`+0.20 above` / `-1.10 below`), and per-iteration transcripts (input → agent output → judge score + reasoning) when persisted
+- Note: the executor's per-iteration transcript persistence is in flight — real `edt eval` runs currently surface aggregate scores; `--seed-demo` writes synthetic transcripts to demo the UI shape
+
 ## Status
 
 Pre-alpha. The YAML shape is stable enough that M1-M5 scenarios survive migrations, but we haven't cut a 1.0 tag. The Go API may move. Feedback shapes the roadmap.
 
 ## Roadmap
 
-Near-term: TypeScript SDK (scenarios as typed code that compiles to YAML), Helm chart, gRPC + WebSocket + SSE connectors, Protobuf codec, GitHub repo write-access for MCP clients. Longer: multi-tenant SaaS managed by Conduktor, richer agent tooling (memory, tool-use rubrics), replay from production topics.
+Near-term: persist per-iteration eval transcripts from the real executor (the storage column + UI render landed; the executor still needs to feed it), an in-builder eval editor for `agent_under_test` + `evals[]` (currently read-only in the canvas — edit YAML directly to add evals), TypeScript SDK (scenarios as typed code that compiles to YAML), Helm chart, GitHub repo write-access for MCP clients. Longer: multi-tenant SaaS managed by Conduktor, richer agent tooling (memory, tool-use rubrics), replay from production topics, eval scheduling from the control plane (today evals are one-shot CLI invocations).
 
 ## Contributing
 
