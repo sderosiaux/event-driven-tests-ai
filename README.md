@@ -2,6 +2,8 @@
 
 **Test your Kafka flows like Postman tests your REST APIs. Run the same scenario once in CI, or forever as a synthetic probe in prod.**
 
+![Scenario builder — palette, free-form canvas, live YAML preview, eval mode](docs/builder.png)
+
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-pre--alpha-yellow.svg)](#status)
 
