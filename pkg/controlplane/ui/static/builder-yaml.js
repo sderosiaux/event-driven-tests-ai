@@ -79,13 +79,18 @@ function renderEvalsReadout() {
   out.innerHTML = html;
 }
 
-// Drag-to-resize handle between the canvas and the YAML pane. Persists
-// the chosen width to localStorage so it survives reloads. Width is
-// applied via the `--yaml-width` CSS variable on .builder-layout, which
-// drives the grid-template-columns value.
-const YAML_WIDTH_KEY = 'edt.builder.yaml-width';
+// Resize + collapse for the YAML pane. Three persisted bits of state:
+//   edt.builder.yaml-width     — last expanded width in px (240..max)
+//   edt.builder.yaml-collapsed — '1' when the pane is in rail mode
+// Width drives the --yaml-width CSS variable; collapsed adds a class
+// to .builder-layout that swaps the pane for a 28px vertical rail.
+const YAML_WIDTH_KEY     = 'edt.builder.yaml-width';
+const YAML_COLLAPSED_KEY = 'edt.builder.yaml-collapsed';
 const YAML_WIDTH_MIN = 240;
-const YAML_WIDTH_MAX_FRAC = 0.65; // never let the YAML pane eat more than 65% of the viewport
+const YAML_WIDTH_DEFAULT = 380;
+const YAML_RAIL_WIDTH = 28;
+const YAML_WIDTH_MAX_FRAC = 0.65;
+
 function applyYamlWidth(px) {
   const layout = document.querySelector('.builder-layout');
   if (!layout) return;
@@ -94,24 +99,38 @@ function applyYamlWidth(px) {
   layout.style.setProperty('--yaml-width', clamped + 'px');
   return clamped;
 }
+function setYamlCollapsed(collapsed) {
+  const layout = document.querySelector('.builder-layout');
+  if (!layout) return;
+  if (collapsed) {
+    layout.classList.add('yaml-collapsed');
+    layout.style.setProperty('--yaml-width', YAML_RAIL_WIDTH + 'px');
+    localStorage.setItem(YAML_COLLAPSED_KEY, '1');
+  } else {
+    layout.classList.remove('yaml-collapsed');
+    const saved = parseInt(localStorage.getItem(YAML_WIDTH_KEY) || '', 10);
+    applyYamlWidth(saved > 0 ? saved : YAML_WIDTH_DEFAULT);
+    localStorage.removeItem(YAML_COLLAPSED_KEY);
+  }
+}
 function wireYamlResize() {
   const handle = document.getElementById('yaml-resize');
   const layout = document.querySelector('.builder-layout');
   if (!handle || !layout) return;
-  // Restore previously chosen width.
-  const saved = parseInt(localStorage.getItem(YAML_WIDTH_KEY) || '', 10);
-  if (saved > 0) applyYamlWidth(saved);
+  // Restore prior width + collapsed state.
+  const savedWidth = parseInt(localStorage.getItem(YAML_WIDTH_KEY) || '', 10);
+  if (savedWidth > 0) applyYamlWidth(savedWidth);
+  if (localStorage.getItem(YAML_COLLAPSED_KEY) === '1') setYamlCollapsed(true);
 
   let dragging = false;
   const onDown = (e) => {
+    if (layout.classList.contains('yaml-collapsed')) return; // no drag in rail mode
     dragging = true;
     layout.classList.add('resizing');
     e.preventDefault();
   };
   const onMove = (e) => {
     if (!dragging) return;
-    // YAML width = distance from mouse to right edge of viewport. Tracks
-    // the cursor exactly while dragging the handle.
     const w = applyYamlWidth(window.innerWidth - e.clientX);
     if (w != null) localStorage.setItem(YAML_WIDTH_KEY, String(w));
   };
@@ -123,10 +142,15 @@ function wireYamlResize() {
   handle.addEventListener('mousedown', onDown);
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
-  // Double-click → reset to default 380px.
   handle.addEventListener('dblclick', () => {
-    applyYamlWidth(380);
+    applyYamlWidth(YAML_WIDTH_DEFAULT);
     localStorage.removeItem(YAML_WIDTH_KEY);
   });
+
+  // Collapse / expand affordances.
+  const collapseBtn = document.getElementById('btn-yaml-collapse');
+  if (collapseBtn) collapseBtn.addEventListener('click', () => setYamlCollapsed(true));
+  const rail = document.getElementById('yaml-rail');
+  if (rail) rail.addEventListener('click', () => setYamlCollapsed(false));
 }
 wireYamlResize();

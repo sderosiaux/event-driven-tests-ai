@@ -128,8 +128,19 @@
       <span class="yaml-spacer"></span>
       <span class="yaml-file">scenario.yaml</span>
       <span id="validate-status" class="validate-status"></span>
+      <button id="btn-yaml-collapse" class="yaml-icon-btn" title="Collapse YAML pane" aria-label="Collapse YAML pane">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M5 3l5 5-5 5"/>
+        </svg>
+      </button>
     </div>
     <pre id="yaml-out" class="yaml-code"></pre>
+    <button id="yaml-rail" class="yaml-rail" type="button" title="Expand YAML pane" aria-label="Expand YAML pane">
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M11 3L6 8l5 5"/>
+      </svg>
+      <span class="yaml-rail-label">YAML</span>
+    </button>
   </aside>
 
   <div class="verdict-strip" id="verdict-strip" aria-label="Last run result">
