@@ -26,15 +26,42 @@ const DEFAULT_STATE = {
   data: {},
   steps: [],
   checks: [],
+  // Eval mode: the agent topology (consumes/produces) and the eval
+  // criteria (rubric / judge / threshold). The builder doesn't yet expose
+  // an editor for these, but we MUST carry them through so opening +
+  // saving a scenario doesn't silently drop its evals. Read-only display
+  // lives in the eval-readout panel below the YAML preview.
+  agent_under_test: null,
+  evals: [],
   lastReport: null,
 };
 
 const state = JSON.parse(JSON.stringify(DEFAULT_STATE));
+// Expose to helper modules (builder-yaml.js, builder-pulse.js). Done here
+// — at construction — so any render() / renderYAML() call below this
+// point can rely on window.state being populated.
+window.state = state;
 let stepSeq = 0;
 const nextId = () => `s${++stepSeq}`;
 
 const GRID = 20;
 const CARD_W = 320;
+
+// Inline SVG icons for step types — stroke inherits currentColor so the
+// family-colored .icon class drives the hue. Translated from the design
+// handoff (parts/icons.jsx).
+const ICONS = {
+  produce:   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9"/><path d="M9 5l3 3-3 3"/><circle cx="13.5" cy="8" r="1" fill="currentColor" stroke="none"/></svg>',
+  consume:   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="2.5" cy="8" r="1" fill="currentColor" stroke="none"/><path d="M4 8h9"/><path d="M10 5l3 3-3 3"/></svg>',
+  http:      '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5h12"/><path d="M2 11h12"/><path d="M6 2l-2 12"/><path d="M12 2l-2 12"/></svg>',
+  websocket: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8c1.2-2.5 2.5-2.5 3.5 0S6.8 10.5 8 8s2.5-2.5 3.5 0S13.8 10.5 15 8"/></svg>',
+  sse:       '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="3" cy="8" r="1.2"/><path d="M6.5 5.5a3.5 3.5 0 0 1 0 5"/><path d="M9.5 3a7 7 0 0 1 0 10"/></svg>',
+  grpc:      '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3.5" width="5.5" height="9" rx="1"/><rect x="8.5" y="3.5" width="5.5" height="9" rx="1"/><path d="M7.5 8h1"/></svg>',
+  sleep:     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>',
+  check:     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3 3 7-7"/></svg>',
+  x:         '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+};
+
 // Matches the vertical breathing room most card bodies actually need; used
 // only as a fallback before the first render measures the real DOM height.
 const CARD_H_FALLBACK = 220;
@@ -138,6 +165,11 @@ function toWireShape(s) {
   if (s.data && Object.keys(s.data).length) out.spec.data = s.data;
   out.spec.steps = orderedSteps(s).map(stepToWire);
   if (s.checks.length) out.spec.checks = s.checks.map(c => ({ name: c.name, expr: c.expr, ...(c.severity ? { severity: c.severity } : {}) }));
+  // Carry agent_under_test + evals verbatim. The builder doesn't edit them
+  // yet; round-tripping them keeps Save from silently dropping eval rubrics
+  // when a user opens an LLM-eval scenario in the canvas.
+  if (s.agent_under_test) out.spec.agent_under_test = s.agent_under_test;
+  if (s.evals && s.evals.length) out.spec.evals = s.evals;
   return out;
 }
 
@@ -172,10 +204,28 @@ const canvas = document.getElementById('canvas');
 const yamlOut = document.getElementById('yaml-out');
 const toast = document.getElementById('toast');
 const resultsPane = document.getElementById('results');
+const verdictStrip = document.getElementById('verdict-strip');
+const crumbName = document.getElementById('crumb-name');
+const crumbStatus = document.getElementById('crumb-status');
+
+// highlightYAML / renderYAML / renderEvalsReadout moved to builder-yaml.js
+// to keep this file under the size cap. They read window.state at call
+// time, so nothing here changes for callers (renderYAML is called the
+// same way).
+
+// Crumb saved/unsaved pill. setCrumbSaved(true) = just loaded or just
+// saved; any subsequent input flips back to unsaved.
+function setCrumbSaved(saved) {
+  if (!crumbStatus) return;
+  crumbStatus.textContent = saved ? '● saved' : '● unsaved';
+  crumbStatus.className = 'crumb-status ' + (saved ? 'saved' : 'unsaved');
+}
+// Shorthand for "user just changed something".
+function markDirty() { setCrumbSaved(false); }
 
 function render() {
   renderCanvas();
-  yamlOut.textContent = emitYAML(state);
+  renderYAML(emitYAML(state));
   syncInputs();
   renderResults();
 }
@@ -215,7 +265,10 @@ function renderCanvas() {
   }
 
   canvas.appendChild(connectionsSVG(w, h));
-  state.steps.forEach(step => canvas.appendChild(cardForStep(step)));
+  // Compute execution index per step (Y-sorted) so each card shows its pip.
+  const orderIdx = new Map();
+  orderedSteps(state).forEach((s, i) => orderIdx.set(s.id, i + 1));
+  state.steps.forEach(step => canvas.appendChild(cardForStep(step, orderIdx.get(step.id))));
   state.checks.forEach(check => canvas.appendChild(cardForCheck(check)));
   // After cards mount we know their real heights — refine arrow start points.
   requestAnimationFrame(redrawConnectionsOnly);
@@ -228,10 +281,16 @@ function connectionsSVG(w, h) {
   svg.setAttribute('width', w);
   svg.setAttribute('height', h);
 
+  // <defs> — shared arrow-head markers keyed by verdict. One triangle path,
+  // three color variants so post-run edges inherit the verdict hue of the
+  // target step without extra DOM.
+  svg.appendChild(arrowDefs(svgNS));
+
   // Only link STEPS (not checks) in Y-order. Skip pairs where the next step
   // isn't strictly below — otherwise the arrow loops back and crosses other
   // cards (user feedback: "weird arrows").
   const ordered = orderedSteps(state);
+  let edgeIdx = 0;
   for (let i = 0; i < ordered.length - 1; i++) {
     const a = ordered[i], b = ordered[i + 1];
     if (b.y <= a.y) continue; // skip same-row or backward pairs
@@ -241,38 +300,60 @@ function connectionsSVG(w, h) {
     const ay = a.y + ah;          // bottom of source card
     const bx = b.x + CARD_W / 2;
     const by = b.y;                // top of target card
-    // Orthogonal L-routing: down to midpoint, horizontal, down. Keeps lines
-    // off of other cards in the lanes.
-    const midY = (ay + by) / 2;
+    // Orthogonal L-routing (handoff: rightAnglePath). Down a bit, across,
+    // down to the target. Path terminates at the target's top edge; the
+    // arrow-head marker (refX 6) places its tip exactly at the path end so
+    // the arrow visibly touches the card.
+    const midY = ay + Math.max(18, (by - ay) / 2);
+    const end  = by;
     const path = document.createElementNS(svgNS, 'path');
     const d = ax === bx
-      ? `M ${ax} ${ay} L ${bx} ${by - 6}`
-      : `M ${ax} ${ay} L ${ax} ${midY} L ${bx} ${midY} L ${bx} ${by - 6}`;
+      ? `M ${ax} ${ay} L ${bx} ${end}`
+      : `M ${ax} ${ay} L ${ax} ${midY} L ${bx} ${midY} L ${bx} ${end}`;
     path.setAttribute('d', d);
-    path.setAttribute('class', 'connection');
+    path.dataset.edgeIdx = String(edgeIdx);
+    path.dataset.tgtX = String(bx);
+    path.dataset.tgtY = String(by);
+    edgeIdx++;
+
+    // Verdict class on the edge — inherits the verdict of the TARGET step
+    // (the edge "delivered" that step's outcome).
+    const v = verdictForStep(b);
+    path.setAttribute('class', v ? `connection verdict-${v}` : 'connection');
+    path.setAttribute('marker-end', v === 'pass' ? 'url(#arrow-pass)'
+                                  : v === 'fail' ? 'url(#arrow-fail)'
+                                  : v === 'error' ? 'url(#arrow-warn)'
+                                  : 'url(#arrow-default)');
     svg.appendChild(path);
-    const arrow = document.createElementNS(svgNS, 'polygon');
-    arrow.setAttribute('points', `${bx-5},${by-7} ${bx+5},${by-7} ${bx},${by}`);
-    arrow.setAttribute('class', 'connection-arrow');
-    svg.appendChild(arrow);
   }
 
-  // Draw a subtle dashed link from each check to the step whose output it
-  // references, so users see at a glance which step each assertion covers.
+  // Dashed plum link from each check to the step it references (via
+  // stream('topic')). Orthogonal: across first, then down. Plum/assert
+  // family, subtle (opacity 0.45). Shows at a glance which step each
+  // assertion covers.
   for (const check of state.checks) {
     const ref = findReferencedStep(check.expr);
     if (!ref) continue;
     const rh = cardHeight(ref.id) || CARD_H_FALLBACK;
-    const from = { x: ref.x + CARD_W, y: ref.y + rh / 2 };
-    const to   = { x: check.x,         y: (check.y || 0) + 40 };
+    const x1 = ref.x + CARD_W;
+    const y1 = ref.y + rh / 2;
+    const x2 = check.x;
+    const y2 = (check.y || 0) + 40;
+    const midX = x1 + (x2 - x1) / 2;
     const path = document.createElementNS(svgNS, 'path');
-    const midX = (from.x + to.x) / 2;
-    path.setAttribute('d', `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`);
+    path.setAttribute('d', `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`);
     path.setAttribute('class', 'connection check-link');
     svg.appendChild(path);
   }
   return svg;
 }
+
+// arrowDefs / startPulseAnim / stopPulseAnim / firePulse live in
+// builder-pulse.js. Expose `state` + `orderedSteps` so that module can
+// resolve the target card during a pulse without duplicating the
+// ordering logic.
+window.state = state;
+window.orderedSteps = orderedSteps;
 
 // Match stream('topic') / stream("topic") inside a CEL expression to a step.
 function findReferencedStep(expr) {
@@ -283,7 +364,7 @@ function findReferencedStep(expr) {
   return state.steps.find(s => expectedStream(s) === target);
 }
 
-function cardForStep(step) {
+function cardForStep(step, orderNum) {
   const el = document.createElement('article');
   el.className = `card type-${step.type}`;
   el.dataset.id = step.id;
@@ -292,18 +373,23 @@ function cardForStep(step) {
 
   const v = verdictForStep(step);
   if (v) el.classList.add('verdict-' + v);
+  const badge = v ? `<span class="verdict-badge">${v}</span>` : '';
 
   el.innerHTML = `
+    <div class="pip">${orderNum ?? ''}</div>
     <header>
+      <span class="icon">${ICONS[step.type] || ''}</span>
       <span class="type-badge">${step.type}</span>
       <input class="title" data-field="name" value="${escapeHTML(step.name)}" placeholder="step name">
-      <button class="remove" title="Remove step">×</button>
+      ${badge}
+      <button class="remove" title="Remove step">${ICONS.x}</button>
     </header>
     <div class="body">${bodyForStep(step)}</div>`;
   el.querySelector('.remove').addEventListener('click', e => {
     e.stopPropagation();
     state.steps = state.steps.filter(s => s.id !== step.id);
     render();
+    markDirty();
   });
   wireFields(el, step);
   wireDragCard(el, step);
@@ -319,12 +405,15 @@ function cardForCheck(check) {
 
   const v = verdictForCheck(check);
   if (v) el.classList.add('verdict-' + v);
+  const badge = v ? `<span class="verdict-badge">${v}</span>` : '';
 
   el.innerHTML = `
     <header>
+      <span class="icon">${ICONS.check}</span>
       <span class="type-badge">check</span>
       <input class="title" data-field="name" value="${escapeHTML(check.name)}" placeholder="check name">
-      <button class="remove" title="Remove check">×</button>
+      ${badge}
+      <button class="remove" title="Remove check">${ICONS.x}</button>
     </header>
     <div class="body">
       <div class="field"><label>CEL expression</label>
@@ -342,6 +431,7 @@ function cardForCheck(check) {
     e.stopPropagation();
     state.checks = state.checks.filter(c => c.id !== check.id);
     render();
+    markDirty();
   });
   wireFields(el, check);
   wireDragCard(el, check);
@@ -350,7 +440,7 @@ function cardForCheck(check) {
 
 function bodyForStep(s) {
   const f = (label, input) => `<div class="field"><label>${label}</label>${input}</div>`;
-  const two = (a, b) => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${a}${b}</div>`;
+  const two = (a, b) => `<div class="field-row-2">${a}${b}</div>`;
   switch (s.type) {
     case 'produce': return (
       two(f('Topic', `<input data-field="topic" value="${escapeHTML(s.topic)}">`),
@@ -398,7 +488,8 @@ function wireFields(el, obj) {
   el.querySelectorAll('[data-field]').forEach(input => {
     input.addEventListener('input', () => {
       obj[input.dataset.field] = input.value;
-      yamlOut.textContent = emitYAML(state);
+      renderYAML(emitYAML(state));
+      markDirty();
     });
     input.addEventListener('blur', () => render());
     input.addEventListener('mousedown', e => e.stopPropagation());
@@ -463,10 +554,11 @@ function wireDragCard(el, obj) {
     obj.x = nx; obj.y = ny;
     el.style.left = nx + 'px';
     el.style.top  = ny + 'px';
-    yamlOut.textContent = emitYAML(state);
+    renderYAML(emitYAML(state));
     redrawConnectionsOnly();
   }
   function onUp() {
+    if (dragging) markDirty(); // Y-position drives execution order, so a drag is a state change.
     dragging = false;
     el.classList.remove('dragging');
     document.body.style.cursor = '';
@@ -529,22 +621,24 @@ function syncInputs() {
   document.getElementById('conn-grpc').value      = state.connectors.grpc.address;
 }
 
-document.getElementById('meta-name').addEventListener('input', e => { state.name = e.target.value; yamlOut.textContent = emitYAML(state); });
+document.getElementById('meta-name').addEventListener('input', e => { state.name = e.target.value; renderYAML(emitYAML(state)); markDirty(); });
 document.getElementById('meta-labels').addEventListener('input', e => {
   state.labels = {};
   for (const line of e.target.value.split('\n')) { const [k, v] = line.split('='); if (k && v) state.labels[k.trim()] = v.trim(); }
-  yamlOut.textContent = emitYAML(state);
+  renderYAML(emitYAML(state));
+  markDirty();
 });
-document.getElementById('conn-kafka').addEventListener('input', e => { state.connectors.kafka.bootstrap_servers = e.target.value; yamlOut.textContent = emitYAML(state); });
-document.getElementById('conn-http').addEventListener('input',  e => { state.connectors.http.base_url = e.target.value; yamlOut.textContent = emitYAML(state); });
-document.getElementById('conn-ws').addEventListener('input',    e => { state.connectors.websocket.base_url = e.target.value; yamlOut.textContent = emitYAML(state); });
-document.getElementById('conn-grpc').addEventListener('input',  e => { state.connectors.grpc.address = e.target.value; yamlOut.textContent = emitYAML(state); });
+document.getElementById('conn-kafka').addEventListener('input', e => { state.connectors.kafka.bootstrap_servers = e.target.value; renderYAML(emitYAML(state)); markDirty(); });
+document.getElementById('conn-http').addEventListener('input',  e => { state.connectors.http.base_url = e.target.value; renderYAML(emitYAML(state)); markDirty(); });
+document.getElementById('conn-ws').addEventListener('input',    e => { state.connectors.websocket.base_url = e.target.value; renderYAML(emitYAML(state)); markDirty(); });
+document.getElementById('conn-grpc').addEventListener('input',  e => { state.connectors.grpc.address = e.target.value; renderYAML(emitYAML(state)); markDirty(); });
 
 document.querySelectorAll('[data-add]').forEach(btn => {
   btn.addEventListener('click', () => {
     const pos = nextFreeSlot('step');
     state.steps.push(TEMPLATES[btn.dataset.add](pos));
     render();
+    markDirty();
     // Scroll the canvas so the new card is visible — users dropping into an
     // existing flow shouldn't have to go hunt for what they just added.
     scrollCardIntoView(state.steps[state.steps.length - 1]);
@@ -554,6 +648,7 @@ document.getElementById('btn-add-check').addEventListener('click', () => {
   const pos = nextFreeSlot('check');
   state.checks.push({ id: nextId(), name: `check-${state.checks.length + 1}`, expr: "size(stream('orders')) >= 1", severity: 'critical', x: pos.x, y: pos.y });
   render();
+  markDirty();
   scrollCardIntoView(state.checks[state.checks.length - 1]);
 });
 
@@ -589,28 +684,55 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
   catch (e) { showToast('Copy failed: ' + e.message, 'err'); }
 });
 
+// Inject the family-colored icon into each tile in the palette. Tiles
+// declare their icon by data-icon; the SVG is looked up from the same
+// ICONS table used by cards. Done once at boot — tiles are static.
+document.querySelectorAll('.tile [data-icon]').forEach(slot => {
+  const key = slot.dataset.icon;
+  if (ICONS[key]) slot.innerHTML = ICONS[key];
+});
+
 document.getElementById('btn-validate').addEventListener('click', async () => {
+  const statusEl = document.getElementById('validate-status');
+  statusEl.className = 'validate-status pending';
+  statusEl.textContent = 'checking…';
   try {
     const r = await fetch('/api/v1/scenarios?dry_run=1', { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: emitYAML(state) });
-    if (r.ok) showToast('Scenario is valid', 'ok');
-    else showToast('Validation failed: ' + await r.text(), 'err');
-  } catch (e) { showToast('Cannot reach control plane: ' + e.message, 'err'); }
+    if (r.ok) {
+      statusEl.className = 'validate-status ok';
+      statusEl.textContent = 'valid';
+      showToast('Scenario is valid', 'ok');
+    } else {
+      statusEl.className = 'validate-status err';
+      statusEl.textContent = 'invalid';
+      showToast('Validation failed: ' + await r.text(), 'err');
+    }
+  } catch (e) {
+    statusEl.className = 'validate-status err';
+    statusEl.textContent = 'unreachable';
+    showToast('Cannot reach control plane: ' + e.message, 'err');
+  }
 });
 
 document.getElementById('btn-save').addEventListener('click', async () => {
   try {
     const r = await fetch('/api/v1/scenarios', { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: emitYAML(state) });
     const body = await r.json().catch(() => ({}));
-    if (r.ok) showToast(`Saved: ${body.name} v${body.version}`, 'ok');
+    if (r.ok) { showToast(`Saved: ${body.name} v${body.version}`, 'ok'); setCrumbSaved(true); }
     else showToast('Save failed: ' + (body.error || r.status), 'err');
   } catch (e) { showToast('Cannot reach control plane: ' + e.message, 'err'); }
 });
 
 document.getElementById('btn-run').addEventListener('click', async () => {
   const btn = document.getElementById('btn-run');
-  btn.disabled = true; btn.textContent = 'Running…';
+  const label = btn.querySelector('span');
+  btn.disabled = true;
+  if (label) label.textContent = 'Running…';
   state.lastReport = { running: true };
   renderResults();
+  // Pulse animation is in a separate file; tolerate it being missing
+  // (404, parse error) so the actual run still completes.
+  if (typeof startPulseAnim === 'function') startPulseAnim();
   try {
     const r = await fetch('/api/v1/run-adhoc', { method: 'POST', headers: { 'Content-Type': 'application/yaml' }, body: emitYAML(state) });
     const body = await r.json().catch(() => ({}));
@@ -626,40 +748,70 @@ document.getElementById('btn-run').addEventListener('click', async () => {
     state.lastReport = null;
     showToast('Cannot reach control plane: ' + e.message, 'err');
   } finally {
-    btn.disabled = false; btn.textContent = 'Run live';
+    if (typeof stopPulseAnim === 'function') stopPulseAnim();
+    btn.disabled = false;
+    if (label) label.textContent = 'Run live';
     render();
   }
 });
 
+// Pulse animation helpers moved to builder-pulse.js.
+
 function renderResults() {
   const rep = state.lastReport;
+  // The strip wraps a permanent #results child, so :empty never fires.
+  // Toggle a class instead and let CSS hide the wrapper outright when no
+  // report is present.
+  if (verdictStrip) verdictStrip.classList.toggle('is-empty', !rep);
   if (!rep) {
-    resultsPane.innerHTML = `<p class="muted">No run yet. Click <strong>Run live</strong> to execute this scenario against the real stack.</p>`;
+    resultsPane.innerHTML = '';
     return;
   }
   if (rep.running) {
-    resultsPane.innerHTML = `<p class="muted">Running…</p>`;
+    resultsPane.innerHTML = `
+      <div class="verdict-row running">
+        <div class="verdict-block">
+          <span class="verdict-head">VERDICT</span>
+          <span class="verdict-label"><span class="spinner"></span>Running…</span>
+        </div>
+      </div>`;
     return;
   }
-  const checkRows = (rep.checks || []).map(c =>
-    `<tr>
-       <td class="status-${c.passed ? 'pass' : 'fail'}">${c.passed ? 'PASS' : 'FAIL'}</td>
-       <td>${escapeHTML(c.name)}</td>
-       <td class="muted">${escapeHTML(c.severity || '—')}</td>
-       <td class="muted"><code>${escapeHTML(String(c.value ?? '—'))}</code></td>
-       <td class="muted">${escapeHTML(c.err || '—')}</td>
-     </tr>`).join('');
+  const checks = rep.checks || [];
+  const passed = checks.filter(c => c.passed).length;
+  const failed = checks.length - passed;
   const status = (rep.status || 'unknown');
+  const eventCount = rep.event_count ?? rep.EventCount ?? 0;
+  const durationMs = rep.duration ? (rep.duration / 1e6).toFixed(0) + ' ms' : '';
+  const label = status === 'pass' ? 'All checks pass'
+              : status === 'fail' ? 'Failing check'
+              : status === 'error' ? 'Run errored' : 'Completed';
+
+  const checkRows = checks.map(c => `
+    <tr>
+      <td><span class="status-pill status-${c.passed ? 'pass' : 'fail'}">${c.passed ? 'PASS' : 'FAIL'}</span></td>
+      <td><strong>${escapeHTML(c.name)}</strong></td>
+      <td><span class="sev-badge sev-${escapeHTML(c.severity || 'warning')}">${escapeHTML(c.severity || 'warning')}</span></td>
+      <td class="muted"><code>${escapeHTML(String(c.value ?? '—'))}</code></td>
+      <td class="muted">${escapeHTML(c.err || '—')}</td>
+    </tr>`).join('');
+
   resultsPane.innerHTML = `
-    <div class="result-head status-${escapeHTML(status)}">
-      <strong>${escapeHTML(status.toUpperCase())}</strong>
-      <span class="muted">${escapeHTML(rep.run_id || rep.RunID || '')}</span>
-      <span class="muted">${rep.event_count ?? rep.EventCount ?? 0} events</span>
-      <span class="muted">${rep.duration ? (rep.duration / 1e9).toFixed(2) + 's' : ''}</span>
-      ${rep.run_id ? `<a href="/ui/runs/${encodeURIComponent(rep.run_id)}" class="spaced">open detail →</a>` : ''}
+    <div class="verdict-row status-${escapeHTML(status)}">
+      <div class="verdict-block verdict-main">
+        <span class="verdict-head">VERDICT</span>
+        <span class="verdict-label">● ${escapeHTML(label)}</span>
+        <span class="verdict-counts">${passed} passed · ${failed} failed</span>
+      </div>
+      <div class="verdict-block verdict-run">
+        <span class="verdict-head">RUN</span>
+        ${rep.run_id ? `<span class="run-id mono">${escapeHTML(rep.run_id)}</span>` : ''}
+        <span class="run-meta mono">${eventCount} events · ${durationMs}</span>
+      </div>
+      ${rep.run_id ? `<a href="/ui/runs/${encodeURIComponent(rep.run_id)}" class="detail-link">Open detail →</a>` : ''}
     </div>
     ${rep.error ? `<p class="run-error">${escapeHTML(rep.error)}</p>` : ''}
-    ${checkRows ? `<table><thead><tr><th></th><th>Check</th><th>Severity</th><th>Value</th><th>Error</th></tr></thead><tbody>${checkRows}</tbody></table>` : ''}
+    ${checkRows ? `<table class="verdict-table"><thead><tr><th>Status</th><th>Check</th><th>Severity</th><th>Value</th><th>Error</th></tr></thead><tbody>${checkRows}</tbody></table>` : ''}
   `;
 }
 
@@ -697,6 +849,27 @@ function seedDefaultDemo() {
     { id: nextId(), name: 'produced_orders', expr: "size(stream('user-demo-orders')) >= 25", severity: 'critical', x: LANE_CHECKS, y: 40 },
     { id: nextId(), name: 'httpbin_healthy', expr: "size(stream('http:/status/200')) >= 1",  severity: 'critical', x: LANE_CHECKS, y: 40 + ROW_STEP * 2 },
   ];
+  // Eval mode demo: a tiny LLM judge wired to the user-demo flow so the
+  // YAML preview + the "05 Eval mode" palette section show what the eval
+  // shape looks like out of the box. Builder doesn't edit these yet; YAML
+  // is the source of truth and the round-trip preserves them.
+  state.agent_under_test = {
+    name: 'demo-summarizer',
+    consumes: ['user-demo-orders'],
+    produces: ['user-demo-orders.summary'],
+  };
+  state.evals = [
+    {
+      name: 'order_summary_faithfulness',
+      severity: 'critical',
+      judge: {
+        model: 'claude-sonnet-4-6',
+        rubric_version: 'v1',
+        rubric: 'Score 1-5: does the summary preserve every order fact (id, amount, currency)?\n5 = perfect, 1 = invents or drops fields. Return only the integer.',
+      },
+      threshold: { aggregate: 'avg', value: '>= 4.0', over: '25 runs' },
+    },
+  ];
 }
 
 // Hydrate state from a parsed scenario coming from the API. Steps line up
@@ -715,6 +888,9 @@ function hydrateFromParsed(parsed, yamlBody) {
   // Preserve data generators verbatim — steps reference them via ${data.X}
   // and we don't have a UI for editing generator config yet.
   state.data = { ...(parsed?.spec?.data || {}) };
+  // Preserve agent_under_test + evals verbatim (no editor yet).
+  state.agent_under_test = parsed?.spec?.agent_under_test || null;
+  state.evals = parsed?.spec?.evals || [];
   state.steps = (parsed?.spec?.steps || []).map((s, i) => stepFromParsed(s, i));
   state.checks = (parsed?.spec?.checks || []).map((c, i) => ({
     id: nextId(),
@@ -755,6 +931,7 @@ async function boot() {
     const scn = await fetchJSON('/api/v1/scenarios/' + encodeURIComponent(scenarioName));
     if (scn.parsed) {
       hydrateFromParsed(scn.parsed, scn.yaml);
+      setCrumbSaved(true);
     } else {
       // Fallback when the server couldn't parse (shouldn't happen given we
       // only persist valid YAML) — seed empty state and surface the raw YAML.

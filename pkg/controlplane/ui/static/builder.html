@@ -8,89 +8,143 @@
 </head>
 <body class="builder-page">
 <header>
-  <h1>event-driven-tests-ai</h1>
-  <nav>
+  <a href="/" class="brand-link">
+    <span class="brand-mark">
+      <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+      <span>edt</span>
+    </span>
+    <span class="brand-sub">event-driven-tests</span>
+  </a>
+  <nav class="main-nav">
     <a href="/">Scenarios</a>
     <a href="/ui/builder" class="active">Builder</a>
     <a href="/ui/runs">Runs</a>
     <a href="/ui/evals">Evals</a>
     <a href="/ui/workers">Workers</a>
   </nav>
+  <div class="crumb">
+    <span class="crumb-label">scenario /</span>
+    <strong id="crumb-name" class="crumb-name">new</strong>
+    <span id="crumb-status" class="crumb-status">● unsaved</span>
+  </div>
   <div class="actions">
-    <button id="btn-new">New</button>
-    <button id="btn-copy">Copy YAML</button>
-    <button id="btn-validate">Validate</button>
-    <button id="btn-save">Save</button>
-    <button id="btn-run" class="primary">Run live ▶</button>
+    <button id="btn-new" class="ghost">New</button>
+    <button id="btn-copy" class="ghost">Copy YAML</button>
+    <button id="btn-validate" class="ghost">Validate</button>
+    <button id="btn-save" class="ghost">Save</button>
+    <button id="btn-run" class="primary">
+      <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M4 3l9 5-9 5z"/></svg>
+      <span>Run live</span>
+    </button>
   </div>
 </header>
 
 <main class="builder-layout">
   <aside class="palette" aria-label="Add step">
-    <h2>Scenario</h2>
-    <div class="field">
-      <label>Name</label>
-      <input id="meta-name" type="text" placeholder="my-scenario">
-    </div>
-    <div class="field">
-      <label>Labels (key=value, one per line)</label>
-      <textarea id="meta-labels" rows="2" placeholder="env=staging&#10;team=commerce"></textarea>
-    </div>
 
-    <h2>Connectors</h2>
-    <div class="field">
-      <label>Kafka bootstrap_servers</label>
-      <input id="conn-kafka" type="text" placeholder="localhost:9092">
-    </div>
-    <div class="field">
-      <label>HTTP base_url</label>
-      <input id="conn-http" type="text" placeholder="https://api.example.com">
-    </div>
-    <div class="field">
-      <label>WebSocket base_url</label>
-      <input id="conn-ws" type="text" placeholder="wss://stream.example.com">
-    </div>
-    <div class="field">
-      <label>gRPC address</label>
-      <input id="conn-grpc" type="text" placeholder="api.example.com:443">
-    </div>
+    <section class="palette-section">
+      <div class="palette-label"><span class="palette-num">01</span><span>Scenario</span></div>
+      <div class="field">
+        <label>Name</label>
+        <input id="meta-name" type="text" placeholder="my-scenario">
+      </div>
+      <div class="field">
+        <label>Labels</label>
+        <textarea id="meta-labels" rows="2" placeholder="env=staging&#10;team=commerce"></textarea>
+      </div>
+    </section>
 
-    <h2>Add step</h2>
-    <div class="add-grid">
-      <button data-add="produce">Produce</button>
-      <button data-add="consume">Consume</button>
-      <button data-add="http">HTTP</button>
-      <button data-add="websocket">WebSocket</button>
-      <button data-add="sse">SSE</button>
-      <button data-add="grpc">gRPC</button>
-      <button data-add="sleep">Sleep</button>
-    </div>
+    <section class="palette-section">
+      <div class="palette-label"><span class="palette-num">02</span><span>Connectors</span></div>
+      <div class="conn-list">
+        <label class="conn-row family-flow">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span class="conn-name">Kafka</span>
+          <input id="conn-kafka" class="conn-value" type="text" placeholder="bootstrap_servers">
+        </label>
+        <label class="conn-row family-rr">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span class="conn-name">HTTP</span>
+          <input id="conn-http" class="conn-value" type="text" placeholder="base_url">
+        </label>
+        <label class="conn-row family-stream">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span class="conn-name">WebSocket</span>
+          <input id="conn-ws" class="conn-value" type="text" placeholder="base_url">
+        </label>
+        <label class="conn-row family-rr">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span class="conn-name">gRPC</span>
+          <input id="conn-grpc" class="conn-value" type="text" placeholder="address">
+        </label>
+      </div>
+    </section>
 
-    <h2>Add check</h2>
-    <button id="btn-add-check" class="wide">+ CEL check</button>
+    <section class="palette-section">
+      <div class="palette-label"><span class="palette-num">03</span><span>Add step</span></div>
+      <div class="tile-grid">
+        <button class="tile tile-flow" data-add="produce"><span class="tile-icon" data-icon="produce"></span><span class="tile-label">Produce</span></button>
+        <button class="tile tile-flow" data-add="consume"><span class="tile-icon" data-icon="consume"></span><span class="tile-label">Consume</span></button>
+        <button class="tile tile-rr" data-add="http"><span class="tile-icon" data-icon="http"></span><span class="tile-label">HTTP</span></button>
+        <button class="tile tile-stream" data-add="websocket"><span class="tile-icon" data-icon="websocket"></span><span class="tile-label">WebSocket</span></button>
+        <button class="tile tile-stream" data-add="sse"><span class="tile-icon" data-icon="sse"></span><span class="tile-label">SSE</span></button>
+        <button class="tile tile-rr" data-add="grpc"><span class="tile-icon" data-icon="grpc"></span><span class="tile-label">gRPC</span></button>
+        <button class="tile tile-ctrl" data-add="sleep"><span class="tile-icon" data-icon="sleep"></span><span class="tile-label">Sleep</span></button>
+      </div>
+    </section>
+
+    <section class="palette-section">
+      <div class="palette-label"><span class="palette-num">04</span><span>Add check</span></div>
+      <button id="btn-add-check" class="tile tile-assert tile-wide">
+        <span class="tile-icon" data-icon="check"></span>
+        <span class="tile-label">CEL check</span>
+      </button>
+    </section>
+
+    <section class="palette-section" id="evals-section" hidden>
+      <div class="palette-label"><span class="palette-num">05</span><span>Eval mode</span><span class="palette-readonly">read-only</span></div>
+      <div id="evals-readout" class="evals-readout"></div>
+    </section>
+
   </aside>
 
   <section class="canvas-wrap">
     <div class="canvas-toolbar">
-      <span class="muted">Drag cards anywhere on the canvas. Execution order = Y position (top → bottom). Click <strong>Run live</strong> to execute against the real stack.</span>
+      <span class="toolbar-label">CANVAS</span>
+      <span class="toolbar-prose">Drag steps from the palette. Execution order follows Y position. <kbd>⌘</kbd> + drag to pan.</span>
+    </div>
+    <div class="canvas-column-heads">
+      <span class="col-head">STEPS →</span>
+      <span class="col-head">CHECKS →</span>
     </div>
     <div id="canvas" class="canvas"></div>
-    <div class="results-pane" aria-label="Last run result">
-      <div id="results"></div>
-    </div>
   </section>
+
+  <div id="yaml-resize" class="yaml-resize" role="separator" aria-orientation="vertical" aria-label="Resize YAML pane" tabindex="0"></div>
 
   <aside class="yaml-pane" aria-label="YAML preview">
     <div class="yaml-toolbar">
-      <span class="muted">YAML preview</span>
-      <span id="validate-status" class="muted"></span>
+      <span class="yaml-label">YAML PREVIEW</span>
+      <span class="yaml-spacer"></span>
+      <span class="yaml-file">scenario.yaml</span>
+      <span id="validate-status" class="validate-status"></span>
     </div>
-    <pre id="yaml-out"></pre>
+    <pre id="yaml-out" class="yaml-code"></pre>
   </aside>
+
+  <div class="verdict-strip" id="verdict-strip" aria-label="Last run result">
+    <div id="results"></div>
+  </div>
 </main>
 
 <div id="toast" class="toast"></div>
 
+<!-- Helper modules must load BEFORE builder.js: boot() runs at the bottom
+     of builder.js and immediately calls renderYAML() (yaml module) and
+     connectionsSVG() → arrowDefs() (pulse module). Both helper modules
+     declare functions only and read window.state at call time. -->
+<script src="/ui/static/builder-pulse.js"></script>
+<script src="/ui/static/builder-yaml.js"></script>
 <script src="/ui/static/builder.js"></script>
 </body>
 </html>
