@@ -1,0 +1,68 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: llm-summary-quality
+  labels:
+    domain: ai
+    criticality: high
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+  data:
+    tickets:
+      generator:
+        strategy: faker
+        seed: 7
+        overrides:
+          ticket_id: ${uuid()}
+          subject: ${faker.lorem.sentence(8)}
+          body:    ${faker.lorem.paragraphs(2)}
+  agent_under_test:
+    name: support-summarizer
+    consumes: [showcase.support.tickets.in]
+    produces: [showcase.support.tickets.summary]
+  steps:
+    - name: send-tickets
+      produce:
+        topic: showcase.support.tickets.in
+        payload: ${data.tickets}
+        count: 30
+        rate: 5/s
+  evals:
+    - name: faithfulness
+      severity: critical
+      judge:
+        model: claude-sonnet-4-6
+        rubric_version: v3
+        rubric: |
+          You are scoring a ticket summary on faithfulness to the source ticket.
+          Inputs:
+            INPUT  = the original ticket text
+            OUTPUT = the agent's summary
+
+          Score 1-5 where:
+            5 = every fact in OUTPUT is supported by INPUT, no fabrications
+            3 = mostly supported, one minor unsupported claim
+            1 = OUTPUT contains hallucinations or contradicts INPUT
+
+          Return only the integer score.
+      threshold:
+        aggregate: avg
+        value: ">= 4.2"
+        over: "30 runs"
+
+    - name: conciseness
+      severity: warning
+      judge:
+        model: claude-sonnet-4-6
+        rubric: |
+          Score the summary's conciseness on a 1-5 scale.
+            5 = captures every key fact in <= 25% of the original length
+            3 = readable but ~50% of original length
+            1 = barely shorter than the input or missing critical facts
+          Return only the integer score.
+      threshold:
+        aggregate: p50
+        value: ">= 3.5"
+        over: "30 runs"

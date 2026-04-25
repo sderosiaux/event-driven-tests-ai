@@ -1,0 +1,68 @@
+apiVersion: edt.io/v1
+kind: Scenario
+metadata:
+  name: sentiment-classifier-quality
+  labels:
+    domain: ai
+    criticality: medium
+spec:
+  connectors:
+    kafka:
+      bootstrap_servers: ${KAFKA_BROKERS}
+  data:
+    reviews:
+      generator:
+        strategy: faker
+        seed: 23
+        overrides:
+          review_id: ${uuid()}
+          stars:     ${faker.number.int(1, 5)}
+          body:      ${faker.lorem.paragraph()}
+  agent_under_test:
+    name: sentiment-classifier
+    consumes: [showcase.reviews.in]
+    produces: [showcase.reviews.classified]
+  steps:
+    - name: feed-reviews
+      produce:
+        topic: showcase.reviews.in
+        payload: ${data.reviews}
+        count: 40
+        rate: 8/s
+  evals:
+    - name: label_accuracy
+      severity: critical
+      judge:
+        model: claude-sonnet-4-6
+        rubric_version: v1
+        rubric: |
+          INPUT contains a review and a star rating (1-5).
+          OUTPUT contains the agent's predicted sentiment label
+          (one of: positive, neutral, negative).
+
+          Score the prediction:
+            5 = matches the obvious sentiment from the stars (1-2 negative,
+                3 neutral, 4-5 positive)
+            3 = adjacent label (e.g. predicted neutral when stars=4)
+            1 = inverted (predicted positive on a 1-star review)
+          Return only the integer score.
+      threshold:
+        aggregate: avg
+        value: ">= 4.5"
+        over: "40 runs"
+
+    - name: confidence_calibration
+      severity: warning
+      judge:
+        model: claude-sonnet-4-6
+        rubric: |
+          OUTPUT also contains a confidence score 0.0-1.0.
+          Score the calibration:
+            5 = high confidence on clear cases, low on ambiguous (3-star) ones
+            3 = uniform confidence regardless of input
+            1 = inversely calibrated (confident on ambiguous, hesitant on clear)
+          Return only the integer score.
+      threshold:
+        aggregate: p50
+        value: ">= 3.5"
+        over: "40 runs"
